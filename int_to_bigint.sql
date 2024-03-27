@@ -472,13 +472,13 @@ select format('migr_%s_step_6.sql',:'tbl_name') as fname \gset
 select '\pset format unaligned';
 select '\pset tuples_only on';
 select '\set schema_name '||:'schema_name';
-select '\set rnd_str '||:'rnd_str';
+--select '\set rnd_str '||:'rnd_str';
 select '\set tbl_name '||:'tbl_name';
 select '\set col_name '||:'col_name';
 select '\set old_colname '||:'old_colname';
 select $$select '--Check the list of indexes to be deleted and execute the commands' as "Notice";$$;
 select '';
-select $$select format('drop index concurrently if exists %I."_%s_%s";',:'schema_name',:'tbl_name', :'rnd_str');$$;
+--select $$select format('drop index concurrently if exists %I."_%s_%s";',:'schema_name',:'tbl_name', :'rnd_str');$$;
 select $$select 'drop index concurrently "'||schemaname||'"."'||indexname||'";'
 from pg_indexes
 where schemaname=:'schema_name' and tablename=:'tbl_name' and (indexdef like '%('||:'old_colname'||'%' or indexdef like '%'||:'old_colname'||',%' or indexdef like '%'||:'old_colname'||')%' or
