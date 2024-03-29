@@ -21,20 +21,11 @@ select not exists (select 1 from pg_tables where tablename = :'tbl_name' and sch
 \else
   select format('%I.%I',:'schema_name',:'tbl_name') as res \gset
   \d+ :res
-  -- Находим oid таблицы, дальше много где пригодится.
+  -- Finding th table OID
   select pgc.oid as oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name' \gset
 \endif
 
-
 \prompt 'int4 column name: ' col_name
-/*\set schema_name public
-\set tbl_name big
-\set col_name id1
-*/
---\set schema_name PuB
---\set tbl_name BiG
---\set col_name Id1
-
 --Check column existence
 select not exists (select 1 from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'col_name') as res  \gset
 \if :res
@@ -94,7 +85,7 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
   where indexrelid in (select indexrelid from pg_stat_all_indexes where schemaname = :'schema_name' and relname = :'tbl_name') and
   (select attnum
   from pg_attribute
-  where attrelid = (select pgc.oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name')
+  where attrelid = :oid
   and attnum > 0 and attname = :'batch_field_name') = ((string_to_array(indkey::text, ' ')::int2[])[1]) and indpred is null \gset
   \if :res
     \echo 'There are no indexes that would be suitable for speeding up work on the selected field (either the field is not in the 1st place in the index, or the index is partial, or there are no indexes containing this field)'
@@ -129,7 +120,8 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
        \if :res
          \set batch_size_date '1 day'
        \endif
-       --Проверка того, что введённое значение является интервалом
+
+       --Checking that the entered value is an interval
        --Created random set of symbols, to ensure the uniqueness of the function name.
         select substr(md5(random()::text), 1, 5) as rnd_str \gset
         create or replace function _is_interval_:rnd_str(text) returns boolean
@@ -144,7 +136,7 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
         select not _is_interval_:rnd_str(:'batch_size_date') as res \gset
         drop function _is_interval_:rnd_str;
         \if :res
-           \echo 'Введённое значение должно быть типа interval!'
+           \echo 'The entered value must be of the interval type!'
            \q
         \endif
      \else
@@ -209,12 +201,6 @@ select :'vacuum_cost_delay' = '' as res \gset
   \endif
 \endif
 
-/*/
-\set pg_sleep_interval 50
-\set pg_sleep_value 1
-\set vacuum_interval 20
-*/
-
 --There might be no stat (it is rare, however, may occur if database has just been restored from a backup), so this may be 0, there is a need to gather statistics to confirm.
 analyze :"schema_name".:"tbl_name";
 --We obtained the threshold of n_dead_tuples after which vacuum will be triggered (with a possible deviation of +10 batches).
@@ -229,7 +215,7 @@ select format('migr_%s_step_1.sql',:'tbl_name') as fname \gset
 \out ./:fname
 select format('vacuum %I.%I;'||E'\n',:'schema_name',:'tbl_name');
 select format('select n_live_tup as n_live_tuples from pg_stat_all_tables where schemaname = ''%s'' and relname = ''%s'';'||E'\n',:'schema_name',:'tbl_name');
-select format('select relpages as n_blocks from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=''%s'' and pgn.nspname=''%s'';',:'tbl_name', :'schema_name');
+select format('select relpages as n_blocks from pg_class where oid = %s;',:oid);
 \o
 \echo 'Created ':'fname'
 
@@ -288,7 +274,7 @@ $$ LANGUAGE plpgsql;'||E'\n',:'schema_name',:'tbl_name',:'rnd_str',:'schema_name
          format(E'\n'||'select %s as current_val, now()-:''start_time''::timestamp as elapsed;'||E'\n'||'select pg_sleep(%s);',batch_start,:pg_sleep_value) else '' end||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % 10 = 0 then
          format(E'\n'||'select %I."%s_n_dead_tuples_%s"(%s) as res \gset'||E'\n'||'\if :res'||E'\n'||'  reset lock_timeout;'||E'\n'||'  vacuum %I.%I;'||E'\n'||'  set lock_timeout to ''100ms'';'||E'\n'||'\endif', :'schema_name',:'tbl_name', :'rnd_str', :vacuum_batch, :'schema_name', :'tbl_name') else '' end
-  from generate_series(0, (SELECT relpages+10000 FROM pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name'), :batch_size) as batch_start;
+  from generate_series(0, (SELECT relpages+10000 FROM pg_class where oid = :oid), :batch_size) as batch_start;
 
 \elif :batch_field_is_int
   /*integer or bigint*/
@@ -358,7 +344,7 @@ from pg_index pgi
 where indexrelid in (select indexrelid from pg_stat_all_indexes where schemaname = :'schema_name' and relname = :'tbl_name') and
         (select attnum
                 from pg_attribute
-                where attrelid = (select pgc.oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name') and attnum > 0 and attname = :'col_name') = any (string_to_array(indkey::text, ' ')::int2[])
+                where attrelid = :oid and attnum > 0 and attname = :'col_name') = any (string_to_array(indkey::text, ' ')::int2[])
 union
 /*
 Only partitial indexes
@@ -376,13 +362,36 @@ where tablename=:'tbl_name' and (indexdef like '%WHERE%');
 select format('CREATE INDEX CONCURRENTLY "_%s_%s" on %I.%I(%I) where %I is distinct from %I;', :'tbl_name', :'rnd_str', :'schema_name', :'tbl_name', :'col_name', :'col_name', :'new_colname');
 select '--Please check constraint list:';
 --Creating constraints
-SELECT format('alter table %I.%I add constraint ',:'schema_name',:'tbl_name')||r.conname||'_new '||trim(trailing 'NOT VALID' from replace(pg_catalog.pg_get_constraintdef(r.oid, true), :'col_name', :'new_colname'))||' NOT VALID;'
-FROM pg_catalog.pg_constraint r
-WHERE r.conrelid = (select pgc.oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name') AND r.contype = 'c'
+
+--Check the number of constants, and if it is not equal to 0, then enclose the next block in begin/end
+select count(*)!=0 as res FROM pg_catalog.pg_constraint r
+WHERE r.conrelid = :oid AND r.contype = 'c'
 and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_name')||' ' or
      pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||' %' or
-     pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||')%')
-ORDER BY 1;
+     pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||')%') \gset
+
+\if :res
+  select $$begin;$$;
+  select $$  set local statement_timeout = '1s';$$;
+  SELECT format('  alter table %I.%I add constraint ',:'schema_name',:'tbl_name')||r.conname||'_new '||trim(trailing 'NOT VALID' from replace(pg_catalog.pg_get_constraintdef(r.oid, true), :'col_name', :'new_colname'))||' not valid;'
+  FROM pg_catalog.pg_constraint r
+  WHERE r.conrelid = :oid AND r.contype = 'c'
+  and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_name')||' ' or
+       pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||' %' or
+       pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||')%')
+  ORDER BY 1;
+  select $$commit;$$;
+\endif
+
+--Check not null
+select attnotnull as res from pg_attribute where attrelid = :oid and attname = quote_ident(:'col_name') and attnum > 0 \gset
+\if :res
+  select $$begin;$$;
+  select $$  set local statement_timeout = '1s';$$;
+  select format('  alter table %I.%I add constraint %s_%s_not_null check (%I is not null) not valid;', :'schema_name', :'tbl_name', :'tbl_name', :'new_colname', :'new_colname');
+  select $$commit;$$;
+  select format('alter table %I.%I validate constraint %s_%s_not_null;',:'schema_name', :'tbl_name', :'tbl_name', :'new_colname');
+\endif
 
 \o
 \echo 'Created ':'fname'
@@ -393,7 +402,7 @@ from pg_class pgc
         inner join pg_constraint pgcon on pgc.oid = pgcon.conrelid
 where relname = :'tbl_name' and relkind = 'r' and contype = 'p' \gset
 
---Находим значение, установленное по-умолчанию
+-- Finding default value
 SELECT default_value, default_value IS NOT NULL AS default_value_exists
 FROM (
   SELECT
@@ -401,7 +410,7 @@ FROM (
      FROM pg_catalog.pg_attrdef d
      WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef) AS default_value
   FROM pg_catalog.pg_attribute a
-  WHERE a.attrelid = (select pgc.oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name')
+  WHERE a.attrelid = :oid
     AND attname=:'col_name' AND a.attnum > 0 AND NOT a.attisdropped) AS t \gset
 
 --Finding index name, based on which a new PK will be built
@@ -415,8 +424,7 @@ SELECT
         FROM pg_catalog.pg_attrdef d
         WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef),chr(39),2) as seq_name
         FROM pg_catalog.pg_attribute a
-        --WHERE a.attrelid = (select oid from pg_class where relname = :'tbl_name') AND a.attnum > 0 AND NOT a.attisdropped AND a.atthasdef \gset
-        WHERE a.attrelid = (select pgc.oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name')
+        WHERE a.attrelid = :oid
           AND a.attname=:'col_name' AND a.attnum > 0 AND NOT a.attisdropped AND a.atthasdef \gset
 
 select :'seq_name' = '' as res \gset
@@ -426,11 +434,10 @@ select :'seq_name' = '' as res \gset
    select split_part(pg_get_serial_sequence('"'||:'tbl_name'||'"',:'col_name'), '.', 2)) a where a.seq_name is not null and trim (both from a.seq_name) != '' \gset
   \set is_seq false
 \else
---  \echo 'Sequence is located'
   \set is_seq true
 \endif
 
---Работа с foreign keys
+--Foreign keys
 
 \set quiet on
 create temporary table fk_names_tmp(type int, command text, fk_name text, relname text, condef text);
@@ -472,6 +479,8 @@ select format('  alter table %I.%I drop constraint %I;',          :'schema_name'
 select '  '||command from fk_names_tmp where type = 1;
 select format('  alter table %I.%I alter %I drop default;',       :'schema_name', :'tbl_name', :'col_name');
 select format('  alter table %I.%I alter %I drop not null;',:'schema_name', :'tbl_name', :'col_name');
+select format('  alter table %I.%I alter %I set not null;',:'schema_name', :'tbl_name', :'new_colname');
+select format('  alter table %I.%I drop constraint %s_%s_not_null;',:'schema_name', :'tbl_name', :'tbl_name', :'new_colname');
 select format('  alter table %I.%I rename %I to %I;',           :'schema_name', :'tbl_name', :'col_name', :'old_colname');
 select format('  alter table %I.%I rename %I to %I;',           :'schema_name', :'tbl_name', :'new_colname', :'col_name');
 --select format('  alter table "%s"."%s" alter "%s" set default nextval(''%s''::regclass);', :'schema_name', :'tbl_name', :'col_name', :'seq_name');
@@ -500,13 +509,12 @@ select format('migr_%s_step_6.sql',:'tbl_name') as fname \gset
 select '\pset format unaligned';
 select '\pset tuples_only on';
 select '\set schema_name '||:'schema_name';
---select '\set rnd_str '||:'rnd_str';
 select '\set tbl_name '||:'tbl_name';
 select '\set col_name '||:'col_name';
 select '\set old_colname '||:'old_colname';
+select $$select pgc.oid as oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name' \gset$$;
 select $$select '--Check the list of indexes to be deleted and execute the commands' as "Notice";$$;
 select '';
---select $$select format('drop index concurrently if exists %I."_%s_%s";',:'schema_name',:'tbl_name', :'rnd_str');$$;
 select $$select 'drop index concurrently "'||schemaname||'"."'||indexname||'";'
 from pg_indexes
 where schemaname=:'schema_name' and tablename=:'tbl_name' and (indexdef like '%('||:'old_colname'||'%' or indexdef like '%'||:'old_colname'||',%' or indexdef like '%'||:'old_colname'||')%' or
@@ -520,15 +528,13 @@ select $$select 'reset statement_timeout;';$$;
 --Validate constraints
 select $$SELECT format('alter table %I.%I validate constraint %I;',:'schema_name',:'tbl_name',r.conname) as new_def2
 FROM pg_catalog.pg_constraint r
-WHERE r.conrelid = (select pgc.oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name') AND r.contype in ('c')
+WHERE r.conrelid = :oid AND r.contype in ('c')
 and pg_catalog.pg_get_constraintdef(r.oid, true) like '% NOT VALID%'
 and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_name')||' %' or
      pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||' %' or
      pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||')%');$$;
 
---select array_to_string(array(select '' union select 'alter table '||relname||' validate constraint '||quote_ident(fk_name)||';' as res from fk_names_tmp where type = 2),'','') as res \gset
 select coalesce((select 'alter table '||relname||' validate constraint '||quote_ident(fk_name)||';' from fk_names_tmp where type = 2),'') as res \gset
 \qecho select :'res' ;
 \o
 \echo 'Created ':'fname'
---\set
