@@ -27,6 +27,13 @@ select not exists (select 1 from pg_tables where tablename = :'tbl_name' and sch
 
 
 \prompt 'int4 column name: ' col_name
+/*\set schema_name public
+\set tbl_name big
+\set col_name id1
+*/
+--\set schema_name PuB
+--\set tbl_name BiG
+--\set col_name Id1
 
 --Check column existence
 select not exists (select 1 from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'col_name') as res  \gset
@@ -219,7 +226,7 @@ select round((n_live_tup/100)*:vacuum_interval,0) as vacuum_batch from pg_stat_a
 
 --Step 1. Vacuum is executed and we obtained the number of live records and blocks, which can help in choosing the migration method (direct or through an additional field).
 select format('migr_%s_step_1.sql',:'tbl_name') as fname \gset
-\out ~/:fname
+\out ./:fname
 select format('vacuum %I.%I;'||E'\n',:'schema_name',:'tbl_name');
 select format('select n_live_tup as n_live_tuples from pg_stat_all_tables where schemaname = ''%s'' and relname = ''%s'';'||E'\n',:'schema_name',:'tbl_name');
 select format('select relpages as n_blocks from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=''%s'' and pgn.nspname=''%s'';',:'tbl_name', :'schema_name');
@@ -228,8 +235,9 @@ select format('select relpages as n_blocks from pg_class pgc inner join pg_names
 
 --Step 2. Added column, created a function and a trigger
 select format('migr_%s_step_2.sql',:'tbl_name') as fname \gset
-\out ~/:fname
+\out ./:fname
 select 'begin;';
+select '  set local statement_timeout to ''1000ms'';';
 select format('  alter table %I.%I add column %I bigint;'||E'\n',:'schema_name',:'tbl_name',:'new_colname');
 
 select format(
@@ -254,7 +262,7 @@ select $$select 'The next step may take a long time, run it in tmux or screen!!!
 
 --Step 3. Copied data from one column to another
 select format('migr_%s_step_3.sql',:'tbl_name') as fname \gset
-\out ~/:fname
+\out ./:fname
 select 'set lock_timeout to ''100ms'';';
 select 'set session_replication_role to ''replica'';';
 select 'set deadlock_timeout to ''600s'';';
@@ -319,7 +327,7 @@ select :cnt = 0 as res \gset
 \endif
 $$;
 
-select $$select E'\n'||'Please check index and constaint list on step 4!!!' as "Notice";$$;
+select $$select 'Please check index and constraint list on step 4!!!' as "Notice";$$;
 \o
 \echo 'Created ':'fname'
 --\set
@@ -328,12 +336,23 @@ select $$select E'\n'||'Please check index and constaint list on step 4!!!' as "
 --Pullout of all indexes, that are related to the field that we’ve migrated.
 select substr(md5(random()::text), 1, 5) as rnd_str \gset
 select format('migr_%s_step_4.sql',:'tbl_name') as fname \gset
-\out ~/:fname
-\echo '===Please check index and constraint list on step 4!!!'
-select '--Please check index list';
+\out ./:fname
+--\echo '===Please check index and constraint list on step 4!!!'
+--select '--Please check index list';
 --We retrieve indexes built in our field (excluding indexes where this field is specified in the conditions)
+/*
+1) "(id," -> "(new_id,"
+2) "(id)" -> "(new_id)"
+3) ", id)" -> ", new_id)"
+4) ", id," -> ", new_id,"
+*/
+
 select replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 1), 'INDEX', 'INDEX CONCURRENTLY'), pgc.relname, '_'||pgc.relname)||' USING '||
-replace(split_part(pg_get_indexdef(indexrelid),' USING ', 2), :'col_name', :'new_colname')||';'
+replace(replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 2),
+   '('||quote_ident(:'col_name')||',','('||quote_ident(:'new_colname')||','),
+   '('||quote_ident(:'col_name')||')', '('||quote_ident(:'new_colname')||')'),
+   ', '||quote_ident(:'col_name')||')', ', '||quote_ident(:'new_colname')||')'),
+   ', '||quote_ident(:'col_name')||',',', '||quote_ident(:'new_colname')||',')||';'
 from pg_index pgi
         inner join pg_class pgc on pgi.indexrelid = pgc.oid
 where indexrelid in (select indexrelid from pg_stat_all_indexes where schemaname = :'schema_name' and relname = :'tbl_name') and
@@ -341,11 +360,17 @@ where indexrelid in (select indexrelid from pg_stat_all_indexes where schemaname
                 from pg_attribute
                 where attrelid = (select pgc.oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name') and attnum > 0 and attname = :'col_name') = any (string_to_array(indkey::text, ' ')::int2[])
 union
---этот запрос учитывает всё, но может понахватать и другие индексы
+/*
+Only partitial indexes
+1) "(id " -> "(new_id "
+2) " id)" -> " new_id)"
+*/
 select split_part(replace(replace(indexdef, 'INDEX', 'INDEX CONCURRENTLY'), indexname, '_'||indexname),' USING ', 1)||' USING '||
-replace(split_part(indexdef,' USING ', 2),:'col_name', :'new_colname')||';'
+replace(replace(split_part(indexdef,' USING ', 2),
+  '('||quote_ident(:'col_name')||' ','('||quote_ident(:'new_colname')||' '),
+  ' '||quote_ident(:'col_name')||')',' '||quote_ident(:'new_colname')||')')||';'
 from pg_indexes
-where tablename=:'tbl_name' and (indexdef like '%('||:'col_name'||'%' or indexdef like '%'||:'col_name'||',%' or indexdef like '%'||:'col_name'||')%' or indexdef like '%("'||:'col_name'||'%' or indexdef like '%"'||:'col_name'||'",%' or indexdef like '%'||:'col_name'||'")%');
+where tablename=:'tbl_name' and (indexdef like '%WHERE%');
 
 --Created a temporary index
 select format('CREATE INDEX CONCURRENTLY "_%s_%s" on %I.%I(%I) where %I is distinct from %I;', :'tbl_name', :'rnd_str', :'schema_name', :'tbl_name', :'col_name', :'col_name', :'new_colname');
@@ -401,11 +426,13 @@ select :'seq_name' = '' as res \gset
    select split_part(pg_get_serial_sequence('"'||:'tbl_name'||'"',:'col_name'), '.', 2)) a where a.seq_name is not null and trim (both from a.seq_name) != '' \gset
   \set is_seq false
 \else
-  \echo 'Sequence is located'
+--  \echo 'Sequence is located'
   \set is_seq true
 \endif
 
 --Работа с foreign keys
+
+\set quiet on
 create temporary table fk_names_tmp(type int, command text, fk_name text, relname text, condef text);
 
 insert into fk_names_tmp SELECT 1, 'alter table '||conrelid::pg_catalog.regclass::text||' drop constraint '||quote_ident(conname)||';',
@@ -427,10 +454,11 @@ conname, conrelid::pg_catalog.regclass AS ontable,
        AND contype = 'f' AND conparentid = 0
            AND pg_catalog.pg_get_constraintdef(oid, true) like '%('||quote_ident(:'col_name')||')%'
 ORDER BY conname;
+\set quiet off
 
 --Step 5. The sequence of commands for transition itself
 select format('migr_%s_step_5.sql',:'tbl_name') as fname \gset
-\out ~/:fname
+\out ./:fname
 
 --Updating all the fields where values in the new column and the old one do not match (to speed up the search the temporary index was created during step 4)
 --Moving away from seq_scan - here the optimizer can mistakenly incur unnecessary costs
@@ -456,8 +484,8 @@ select '  '||command from fk_names_tmp where type = 2;
 select format('  drop trigger "%s_migr_t" on %I.%I;', :'tbl_name', :'schema_name', :'tbl_name');
 select format('  drop function %I."%s_migr_f"();',:'schema_name',:'tbl_name');
 select 'COMMIT;';
-select $$select E'\n'||'If using connection pooler then you will may need to perform reconnect there since table definition was changed and the cached plan result type may have changed.' as "Notice";$$;
-select $$select E'\n'||E'\n'||'Please check the result before proceeding to step 6';$$;
+select $$select 'If using connection pooler then you will may need to perform reconnect there since table definition was changed and the cached plan result type may have changed.' as "Notice";$$;
+select $$select 'Please check the result before proceeding to step 6.' as "Notice";$$;
 \o
 \echo 'Created ':'fname'
 
@@ -467,7 +495,7 @@ select $$select E'\n'||E'\n'||'Please check the result before proceeding to step
 
 --Remove related to the old field indexes.
 select format('migr_%s_step_6.sql',:'tbl_name') as fname \gset
-\out ~/:fname
+\out ./:fname
 \echo '===Please check index list in step 6!!!'
 select '\pset format unaligned';
 select '\pset tuples_only on';
@@ -503,3 +531,4 @@ select coalesce((select 'alter table '||relname||' validate constraint '||quote_
 \qecho select :'res' ;
 \o
 \echo 'Created ':'fname'
+--\set
