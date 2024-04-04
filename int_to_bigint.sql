@@ -1,4 +1,5 @@
 \echo 'This utility helps you migrate int4 to bigint'
+
 \prompt 'Schema name: [public]: ' schema_name
 select :'schema_name' = '' as res \gset
 \if :res
@@ -20,8 +21,10 @@ select not exists (select 1 from pg_tables where tablename = :'tbl_name' and sch
   \q
 \else
   select format('%I.%I',:'schema_name',:'tbl_name') as res \gset
+  \pset pager on
   \d+ :res
-  -- Finding th table OID
+  \pset pager off
+  -- Finding the table OID
   select pgc.oid as oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name' \gset
 \endif
 
@@ -171,7 +174,7 @@ select :'pg_sleep_value' = '' as res \gset
   \endif
 \endif
 
-\prompt 'Vacuum after every N% rows complited [10]: ' vacuum_interval
+\prompt 'Vacuum after every N% rows completed [10]: ' vacuum_interval
 select :'vacuum_interval' = '' as res \gset
 \if :res
   \set vacuum_interval 10
@@ -215,9 +218,9 @@ select format('migr_%s_step_1.sql',:'tbl_name') as fname \gset
 \out ./:fname
 select format('vacuum %I.%I;'||E'\n',:'schema_name',:'tbl_name');
 select format('select n_live_tup as n_live_tuples from pg_stat_all_tables where schemaname = ''%s'' and relname = ''%s'';'||E'\n',:'schema_name',:'tbl_name');
-select format('select relpages as n_blocks from pg_class where oid = %s;',:oid);
+select format('select relpages as n_pages from pg_class where oid = %s;',:oid);
 \o
-\echo 'Created ':'fname'
+\echo 'Created ':'fname' -  Information about table
 
 --Step 2. Added column, created a function and a trigger
 select format('migr_%s_step_2.sql',:'tbl_name') as fname \gset
@@ -241,10 +244,10 @@ SELECT format(
   execute function %I."%s_migr_f"();', :'tbl_name', :'schema_name', :'tbl_name', :'schema_name',:'tbl_name');
 select 'commit;';
 
-select $$select 'The next step may take a long time, run it in tmux or screen!!!' as "Notice";$$;
+select $$select 'The next step may take a long time, run it in tmux or screen!' as "Notice";$$;
 
 \o
-\echo 'Created ':'fname'
+\echo 'Created ':'fname' - Add column, trigger and function
 
 --Step 3. Copied data from one column to another
 select format('migr_%s_step_3.sql',:'tbl_name') as fname \gset
@@ -253,27 +256,37 @@ select 'set lock_timeout to ''100ms'';';
 select 'set session_replication_role to ''replica'';';
 select 'set deadlock_timeout to ''600s'';';
 select format('set vacuum_cost_delay to %s;',:vacuum_cost_delay);
-select 'select now() as start_time \gset'||E'\n';
-
---Created random set of symbols, to ensure the uniqueness of the function name.
-select substr(md5(random()::text), 1, 5) as rnd_str \gset
-
-select format ('create or replace function %I."%s_n_dead_tuples_%s"(n integer) returns boolean as $$
-declare answer boolean;
-begin
-  select n_dead_tup >= n into answer from pg_stat_all_tables where schemaname = ''%s'' and relname = ''%s'';
-  return answer;
-end;
-$$ LANGUAGE plpgsql;'||E'\n',:'schema_name',:'tbl_name',:'rnd_str',:'schema_name',:'tbl_name');
+select 'select now() as start_time \gset';
+select '\set cnt_err_vac 0'||E'\n';
 
 \if :ver_14
   /*ctid*/
-  select format('update %I.%I set %I = %I where %I is distinct from %I and ctid >=''(%s,0)'' and ctid<''(%s,0)'';',
-                 :'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',batch_start,batch_start+:batch_size)||
+  select relpages+10000 as n_pages from pg_class where oid = :oid \gset
+  select format('update %I.%I set %I = %I where %I is distinct from %I and ctid >=''(%s,0)'' and ctid<''(%s,0)'';',:'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',batch_start,batch_start+:batch_size)||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
-         format(E'\n'||'select %s as current_val, now()-:''start_time''::timestamp as elapsed;'||E'\n'||'select pg_sleep(%s);',batch_start,:pg_sleep_value) else '' end||
+      format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as pages_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,
+        date_trunc(''sec'',(now()-:''start_time''::timestamp)/round(%s*100/%s,1)*100 - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',batch_start,:n_pages,round(batch_start*100/:n_pages,1),batch_start,:n_pages,:pg_sleep_value) else '' end ||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % 10 = 0 then
-         format(E'\n'||'select %I."%s_n_dead_tuples_%s"(%s) as res \gset'||E'\n'||'\if :res'||E'\n'||'  reset lock_timeout;'||E'\n'||'  vacuum %I.%I;'||E'\n'||'  set lock_timeout to ''100ms'';'||E'\n'||'\endif', :'schema_name',:'tbl_name', :'rnd_str', :vacuum_batch, :'schema_name', :'tbl_name') else '' end
+      format(E'\n'||
+          'select n_dead_tup >= %s as res from pg_stat_all_tables where relid = %s \gset',:vacuum_batch, :oid)||E'\n'||
+          '\if :res'||E'\n'||
+          '  reset lock_timeout;'||E'\n'||
+          format('  vacuum %I.%I;',:'schema_name', :'tbl_name')||E'\n'||
+          format('  select  n_dead_tup < %s as res from pg_stat_all_tables where relid = %s \gset',:vacuum_batch, :oid)||E'\n'||
+          '  \if :res'||E'\n'||
+          '    \set cnt_err_vac 0'||E'\n'||
+          '  \else'||E'\n'||
+          '    select :cnt_err_vac::int + 1 as cnt_err_vac \gset'||E'\n'||
+          '    select :cnt_err_vac >= 3 as res \gset'||E'\n'||
+          '    \if :res'||E'\n'||
+          '       \echo ''I can not perform a vacuum on the table. There may be a competing long-running transaction. Get rid of it and start step 3 from the beginning'''||E'\n'||
+          '       \q'||E'\n'||
+          '    \endif'||E'\n'||
+          '  \endif '||E'\n'||
+          '  set lock_timeout to ''100ms'';'||E'\n'||
+          '\endif'
+    else ''
+    end
   from generate_series(0, (SELECT relpages+10000 FROM pg_class where oid = :oid), :batch_size) as batch_start;
 
 \elif :batch_field_is_int
@@ -283,7 +296,8 @@ $$ LANGUAGE plpgsql;'||E'\n',:'schema_name',:'tbl_name',:'rnd_str',:'schema_name
   case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
        format(E'\n'||'select %s as current_val, now()-:''start_time''::timestamp as elapsed;'||E'\n'||'select pg_sleep(%s);',batch_start,:pg_sleep_value) else '' end||
   case when ROW_NUMBER () OVER (ORDER BY batch_start) % 10 = 0 then
-        format(E'\n'||'select %I."%s_n_dead_tuples_%s"(%s) as res \gset'||E'\n'||'\if :res'||E'\n'||'  reset lock_timeout;'||E'\n'||'  vacuum %I.%I;'||E'\n'||'  set lock_timeout to ''100ms'';'||E'\n'||'\endif', :'schema_name',:'tbl_name', :'rnd_str', :vacuum_batch, :'schema_name', :'tbl_name') else '' end
+        format(E'\n'||'select case when n_dead_tup >= %s then true else false end as res from pg_stat_all_tables where schemaname = ''%s'' and relname = ''%s'' \gset'
+        ||E'\n'||'\if :res'||E'\n'||'  reset lock_timeout;'||E'\n'||'  vacuum %I.%I;'||E'\n'||'  set lock_timeout to ''100ms'';'||E'\n'||'\endif', :vacuum_batch, :'schema_name', :'tbl_name', :'schema_name', :'tbl_name') else '' end
   from generate_series((select min(:"batch_field_name") from :"schema_name".:"tbl_name"), (select max(:"batch_field_name") + :batch_size_int::int + 10000 from :"schema_name".:"tbl_name"), :batch_size_int) as batch_start;
 \else
   /*date, timestamp*/
@@ -292,13 +306,13 @@ $$ LANGUAGE plpgsql;'||E'\n',:'schema_name',:'tbl_name',:'rnd_str',:'schema_name
   case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
        format(E'\n'||'select ''%s'' as current_val, now()-:''start_time''::timestamp as elapsed;'||E'\n'||'select pg_sleep(%s);',batch_start,:pg_sleep_value) else '' end||
   case when ROW_NUMBER () OVER (ORDER BY batch_start) % 10 = 0 then
-        format(E'\n'||'select %I."%s_n_dead_tuples_%s"(%s) as res \gset'||E'\n'||'\if :res'||E'\n'||'  reset lock_timeout;'||E'\n'||'  vacuum %I.%I;'||E'\n'||'  set lock_timeout to ''100ms'';'||E'\n'||'\endif', :'schema_name',:'tbl_name', :'rnd_str', :vacuum_batch, :'schema_name', :'tbl_name') else '' end
+        format(E'\n'||'select case when n_dead_tup >= %s then true else false end as res from pg_stat_all_tables where schemaname = ''%s'' and relname = ''%s'' \gset'
+        ||E'\n'||'\if :res'||E'\n'||'  reset lock_timeout;'||E'\n'||'  vacuum %I.%I;'||E'\n'||'  set lock_timeout to ''100ms'';'||E'\n'||'\endif', :vacuum_batch, :'schema_name', :'tbl_name', :'schema_name', :'tbl_name') else '' end
   from generate_series((select min(:"batch_field_name") from :"schema_name".:"tbl_name"), (select max(:"batch_field_name") + :'batch_size_date'::interval*100 from :"schema_name".:"tbl_name"), :'batch_size_date') as batch_start;
 \endif
 
 select 'reset lock_timeout;';
 select format('vacuum %I.%I;',:'schema_name',:'tbl_name');
-select format('drop function %I."%s_n_dead_tuples_%s";',:'schema_name',:'tbl_name',:'rnd_str');
 select 'select now()-:''start_time''::timestamp as total_elapsed;';
 
 select $$select 'The non-updated rows are being counted, please wait...' as "Information";$$;
@@ -313,9 +327,9 @@ select :cnt = 0 as res \gset
 \endif
 $$;
 
-select $$select 'Please check index and constraint list on step 4!!!' as "Notice";$$;
+select $$select 'Please check index and constraint list on step 4!' as "Notice";$$;
 \o
-\echo 'Created ':'fname'
+\echo 'Created ':'fname' - Copy data from old column to new
 --\set
 
 --Step4. Working with index, sequences and constraints.
@@ -323,8 +337,6 @@ select $$select 'Please check index and constraint list on step 4!!!' as "Notice
 select substr(md5(random()::text), 1, 5) as rnd_str \gset
 select format('migr_%s_step_4.sql',:'tbl_name') as fname \gset
 \out ./:fname
---\echo '===Please check index and constraint list on step 4!!!'
---select '--Please check index list';
 --We retrieve indexes built in our field (excluding indexes where this field is specified in the conditions)
 /*
 1) "(id," -> "(new_id,"
@@ -384,7 +396,7 @@ and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_n
 \endif
 
 --Check not null
-select attnotnull as res from pg_attribute where attrelid = :oid and attname = quote_ident(:'col_name') and attnum > 0 \gset
+select attnotnull as res from pg_attribute where attrelid = :oid and attname = :'col_name' and attnum > 0 \gset
 \if :res
   select $$begin;$$;
   select $$  set local statement_timeout = '1s';$$;
@@ -394,13 +406,10 @@ select attnotnull as res from pg_attribute where attrelid = :oid and attname = q
 \endif
 
 \o
-\echo 'Created ':'fname'
+\echo 'Created ':'fname' - Indexes and constraints
 
 --Finding PrimaryKey
-select pgcon.conname as pk_name
-from pg_class pgc
-        inner join pg_constraint pgcon on pgc.oid = pgcon.conrelid
-where relname = :'tbl_name' and relkind = 'r' and contype = 'p' \gset
+select conname as pk_name from pg_constraint where conrelid = :oid and contype = 'p' \gset
 
 -- Finding default value
 SELECT default_value, default_value IS NOT NULL AS default_value_exists
@@ -416,7 +425,7 @@ FROM (
 --Finding index name, based on which a new PK will be built
 select '_'||relname as new_pk_idx
 from pg_class
-where oid = (select indexrelid from pg_index where indrelid = (select oid from pg_class where relname = :'tbl_name') and indisprimary) \gset
+where oid = (select indexrelid from pg_index where indrelid = (select oid from pg_class where oid = :oid) and indisprimary) \gset
 
 --Locating sequence name
 SELECT
@@ -439,7 +448,6 @@ select :'seq_name' = '' as res \gset
 
 --Foreign keys
 
-\set quiet on
 create temporary table fk_names_tmp(type int, command text, fk_name text, relname text, condef text);
 
 insert into fk_names_tmp SELECT 1, 'alter table '||conrelid::pg_catalog.regclass::text||' drop constraint '||quote_ident(conname)||';',
@@ -461,7 +469,6 @@ conname, conrelid::pg_catalog.regclass AS ontable,
        AND contype = 'f' AND conparentid = 0
            AND pg_catalog.pg_get_constraintdef(oid, true) like '%('||quote_ident(:'col_name')||')%'
 ORDER BY conname;
-\set quiet off
 
 --Step 5. The sequence of commands for transition itself
 select format('migr_%s_step_5.sql',:'tbl_name') as fname \gset
@@ -471,9 +478,10 @@ select format('migr_%s_step_5.sql',:'tbl_name') as fname \gset
 --Moving away from seq_scan - here the optimizer can mistakenly incur unnecessary costs
 select 'set enable_seqscan to 0;';
 select format('update %I.%I set %I = %I where %I is distinct from %I;',:'schema_name',:'tbl_name', :'new_colname', :'col_name', :'col_name', :'new_colname')||E'\n';
-
+select 'select now() as start_time \gset';
+select '\timing on';
 select 'BEGIN;';
-select '  set local statement_timeout to ''1000ms'';';
+select '  set local statement_timeout to ''20s'';';
 select format('  lock table  %I.%I in access exclusive mode;',      :'schema_name', :'tbl_name');
 select format('  alter table %I.%I drop constraint %I;',          :'schema_name', :'tbl_name', :'pk_name');
 select '  '||command from fk_names_tmp where type = 1;
@@ -493,28 +501,36 @@ select '  '||command from fk_names_tmp where type = 2;
 select format('  drop trigger "%s_migr_t" on %I.%I;', :'tbl_name', :'schema_name', :'tbl_name');
 select format('  drop function %I."%s_migr_f"();',:'schema_name',:'tbl_name');
 select 'COMMIT;';
+select '\timing off';
+select 'select now()-:''start_time''::timestamp as total_elapsed;';
 select $$select 'If using connection pooler then you will may need to perform reconnect there since table definition was changed and the cached plan result type may have changed.' as "Notice";$$;
 select $$select 'Please check the result before proceeding to step 6.' as "Notice";$$;
 \o
-\echo 'Created ':'fname'
+\echo 'Created ':'fname' - Change columns
 
 --Step 6. The final step: generating the file should only occur after the first 5 steps have been completed.
 --It is recommended to perform a reconnect for the bouncers
-\echo 'If using connection pooler then you will may need to perform reconnect there since table definition was changed and the cached plan result type may have changed.'
+--\echo 'If using connection pooler then you will may need to perform reconnect there since table definition was changed and the cached plan result type may have changed.'
 
 --Remove related to the old field indexes.
 select format('migr_%s_step_6.sql',:'tbl_name') as fname \gset
 \out ./:fname
-\echo '===Please check index list in step 6!!!'
+select $$select format('%I.%I',:'schema_name',:'tbl_name') as res \gset$$;
+select $$\pset pager on$$;
+select $$\d+ :res$$;
+select $$\pset pager off$$;
+
 select '\pset format unaligned';
 select '\pset tuples_only on';
 select '\set schema_name '||:'schema_name';
 select '\set tbl_name '||:'tbl_name';
 select '\set col_name '||:'col_name';
-select '\set old_colname '||:'old_colname';
+select '\set old_colname '||:'old_colname'||E'\n';
+
+select $$select '--Check the list of indexes to be deleted and execute the commands' as "Notice";$$||E'\n';
+--select '';
+
 select $$select pgc.oid as oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name' \gset$$;
-select $$select '--Check the list of indexes to be deleted and execute the commands' as "Notice";$$;
-select '';
 select $$select 'drop index concurrently "'||schemaname||'"."'||indexname||'";'
 from pg_indexes
 where schemaname=:'schema_name' and tablename=:'tbl_name' and (indexdef like '%('||:'old_colname'||'%' or indexdef like '%'||:'old_colname'||',%' or indexdef like '%'||:'old_colname'||')%' or
@@ -537,4 +553,8 @@ and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_n
 select coalesce((select 'alter table '||relname||' validate constraint '||quote_ident(fk_name)||';' from fk_names_tmp where type = 2),'') as res \gset
 \qecho select :'res' ;
 \o
-\echo 'Created ':'fname'
+\echo 'Created ':'fname' - Create commands for delete obsolete column and indexes
+--Finish procedure
+--Start procedure
+\pset format aligned
+\pset tuples_only off
