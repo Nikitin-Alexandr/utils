@@ -368,7 +368,7 @@ replace(replace(split_part(indexdef,' USING ', 2),
   '('||quote_ident(:'col_name')||' ','('||quote_ident(:'new_colname')||' '),
   ' '||quote_ident(:'col_name')||')',' '||quote_ident(:'new_colname')||')')||';'
 from pg_indexes
-where tablename=:'tbl_name' and (indexdef like '%WHERE%');
+where tablename=:'tbl_name' and schemaname = :'schema_name' and (indexdef like '%WHERE%') and (split_part(indexdef,' USING ', 2) like  '%('||:'col_name'||' %' or split_part(indexdef,' USING ', 2) like '% '||:'col_name'||')%');
 
 --Created a temporary index
 select format('CREATE INDEX CONCURRENTLY "_%s_%s" on %I.%I(%I) where %I is distinct from %I;', :'tbl_name', :'rnd_str', :'schema_name', :'tbl_name', :'col_name', :'col_name', :'new_colname');
