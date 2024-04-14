@@ -43,6 +43,8 @@ select data_type != 'integer' as res from information_schema.columns where table
   \q
 \endif
 
+select pgc.oid as oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name' \gset
+
 \set new_colname new_:col_name
 \set old_colname old_:col_name
 
@@ -68,7 +70,7 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
   \set ver_14 false
   \echo -n 'Field name that will be used to split data into equal batches (type: integer, bigint, date, timestamp): [':'col_name']:
   \prompt ' ' batch_field_name
-/*  \set batch_field_name created_at*/
+  --\set batch_field_name created_at
 
   select :'batch_field_name' = '' as res \gset
   \if :res
@@ -204,10 +206,8 @@ select :'vacuum_cost_delay' = '' as res \gset
   \endif
 \endif
 
---There might be no stat (it is rare, however, may occur if database has just been restored from a backup), so this may be 0, there is a need to gather statistics to confirm.
---analyze :"schema_name".:"tbl_name";
 --We obtained the threshold of n_dead_tuples after which vacuum will be triggered (with a possible deviation of +10 batches).
-select round((n_live_tup/100)*:vacuum_interval,0) as vacuum_batch from pg_stat_all_tables where relid = :oid \gset
+select round((reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int) * :vacuum_interval/100) as vacuum_batch from pg_class where oid = :oid \gset
 \echo
 \echo ========================
 \echo Information about table:
@@ -324,14 +324,34 @@ select '\set cnt_err_vac 0'||E'\n';
   from generate_series((select min(:"batch_field_name") from :"schema_name".:"tbl_name"), :max_value, :batch_size_int) as batch_start;
 \else
   /*date, timestamp*/
-  select format('update %I.%I set %I = %I where %I is distinct from %I and %I >= ''%s'' and %I < ''%s'';',
-                 :'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',:'batch_field_name',batch_start::date,:'batch_field_name', batch_start::date+:'batch_size_date'::interval)||
-  case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
-       format(E'\n'||'select ''%s'' as current_val, now()-:''start_time''::timestamp as elapsed;'||E'\n'||'select pg_sleep(%s);',batch_start,:pg_sleep_value) else '' end||
-  case when ROW_NUMBER () OVER (ORDER BY batch_start) % 10 = 0 then
-        format(E'\n'||'select case when n_dead_tup >= %s then true else false end as res from pg_stat_all_tables where schemaname = ''%s'' and relname = ''%s'' \gset'
-        ||E'\n'||'\if :res'||E'\n'||'  reset lock_timeout;'||E'\n'||'  vacuum %I.%I;'||E'\n'||'  set lock_timeout to ''100ms'';'||E'\n'||'\endif', :vacuum_batch, :'schema_name', :'tbl_name', :'schema_name', :'tbl_name') else '' end
-  from generate_series((select min(:"batch_field_name") from :"schema_name".:"tbl_name"), (select max(:"batch_field_name") + :'batch_size_date'::interval*100 from :"schema_name".:"tbl_name"), :'batch_size_date') as batch_start;
+  select (max(:"batch_field_name") + :'batch_size_date'::interval*100)::date as max_value, min(:"batch_field_name")::date as min_value from :"schema_name".:"tbl_name" \gset
+  select format('update %I.%I set %I = %I where %I is distinct from %I and %I >= ''%s'' and %I < ''%s'';', :'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',:'batch_field_name',batch_start::date,:'batch_field_name', batch_start::date+:'batch_size_date'::interval)||
+    case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
+    format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as rows_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,',batch_start::date,:'max_value', (batch_start::date -:'min_value'::date)*100/(:'max_value'::date - :'min_value'::date))||
+    format('date_trunc(''sec'',(''%s''::date - ''%s''::date)*(now()-:''start_time''::timestamp)/(''%s''::date - ''%s''::date) - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',
+        :'max_value', :'min_value', batch_start, :'min_value', :pg_sleep_value)
+    else '' end ||
+    case when ROW_NUMBER () OVER (ORDER BY batch_start) % 10 = 0 then
+        format(E'\n'||
+          'select n_dead_tup >= %s as res from pg_stat_all_tables where relid = %s \gset',:vacuum_batch, :oid)||E'\n'||
+          '\if :res'||E'\n'||
+          '  reset lock_timeout;'||E'\n'||
+          format('  vacuum %I.%I;',:'schema_name', :'tbl_name')||E'\n'||
+          format('  select  n_dead_tup < %s as res from pg_stat_all_tables where relid = %s \gset',:vacuum_batch, :oid)||E'\n'||
+          '  \if :res'||E'\n'||
+          '    \set cnt_err_vac 0'||E'\n'||
+          '  \else'||E'\n'||
+          '    select :cnt_err_vac::int + 1 as cnt_err_vac \gset'||E'\n'||
+          '    select :cnt_err_vac >= 3 as res \gset'||E'\n'||
+          '    \if :res'||E'\n'||
+          '       \echo ''Can not perform a vacuum on the table. There may be a competing long-running transaction. Get rid of it and start over from step 2.'''||E'\n'||
+          '       \q'||E'\n'||
+          '    \endif'||E'\n'||
+          '  \endif '||E'\n'||
+          '  set lock_timeout to ''100ms'';'||E'\n'||
+          '\endif'
+  else ''       end
+  from generate_series(date :'min_value', :'max_value', :'batch_size_date') as batch_start;
 \endif
 
 select 'reset lock_timeout;';
@@ -452,12 +472,11 @@ where oid = (select indexrelid from pg_index where indrelid = (select oid from p
 
 --Locating sequence name
 SELECT
-        split_part((SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true)
-        FROM pg_catalog.pg_attrdef d
-        WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef),chr(39),2) as seq_name
-        FROM pg_catalog.pg_attribute a
-        WHERE a.attrelid = :oid
-          AND a.attname=:'col_name' AND a.attnum > 0 AND NOT a.attisdropped AND a.atthasdef \gset
+  split_part((SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef),chr(39),2)::regclass::oid as seq_oid,
+  split_part((SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef),chr(39),2) as seq_name
+  FROM pg_catalog.pg_attribute a
+  WHERE a.attrelid = :oid
+    AND a.attname=:'col_name' AND a.attnum > 0 AND NOT a.attisdropped AND a.atthasdef \gset
 
 select :'seq_name' = '' as res \gset
 \if :res
@@ -514,11 +533,19 @@ select format('  alter table %I.%I alter %I set not null;',:'schema_name', :'tbl
 select format('  alter table %I.%I drop constraint %s_%s_not_null;',:'schema_name', :'tbl_name', :'tbl_name', :'new_colname');
 select format('  alter table %I.%I rename %I to %I;',           :'schema_name', :'tbl_name', :'col_name', :'old_colname');
 select format('  alter table %I.%I rename %I to %I;',           :'schema_name', :'tbl_name', :'new_colname', :'col_name');
---select format('  alter table "%s"."%s" alter "%s" set default nextval(''%s''::regclass);', :'schema_name', :'tbl_name', :'col_name', :'seq_name');
 \if :default_value_exists
   select format('  ALTER TABLE %I.%I ALTER %I SET DEFAULT %s;',:'schema_name', :'tbl_name', :'col_name', :'default_value');
 \endif
 select format('  alter sequence %s owned by %I.%I.%I;', :'seq_name', :'schema_name', :'tbl_name', :'col_name');
+select format('  SELECT pg_catalog.format_type(seqtypid, NULL)=''integer'' as res FROM pg_catalog.pg_sequence WHERE seqrelid = %s \gset',:'seq_oid');
+select '  \if :res';
+select format('    alter sequence %s as bigint;',:'seq_name');
+select '  \endif';
+select format('  SELECT seqmax != 9223372036854775807 as res FROM pg_catalog.pg_sequence WHERE seqrelid = %s \gset',:'seq_oid');
+select '  \if :res';
+select format('    Select $$Обратите внимание! У последовательности задан верхний порог отличный от стандартного. $$||E''\n''||$$Возможно, стоит выполнить команду alter sequence %I no maxvalue;$$ as "Notice";',:'seq_name');
+select '  \endif';
+
 select format('  alter table %I.%I add constraint %I primary key using index %I;',:'schema_name', :'tbl_name', :'pk_name', :'new_pk_idx');
 select '  '||command from fk_names_tmp where type = 2;
 select format('  drop trigger "%s_migr_t" on %I.%I;', :'tbl_name', :'schema_name', :'tbl_name');
@@ -573,7 +600,6 @@ and pg_catalog.pg_get_constraintdef(r.oid, true) like '% NOT VALID%'
 and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_name')||' %' or
      pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||' %' or
      pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||')%');$$;
-
 select coalesce((select 'alter table '||relname||' validate constraint '||quote_ident(fk_name)||';' from fk_names_tmp where type = 2),'') as res \gset
 \qecho select :'res' ;
 
@@ -581,10 +607,6 @@ select $$select '--Information about table:' as "Notice";$$||E'\n';
 --Information about table:
 select $$select '\pset format aligned';$$;
 select $$select '\pset tuples_only off';$$;
---select $m$select $$select format('%I.%I',:'schema_name',:'tbl_name') as res \gset$$;$m$;
---select $m$select $$\pset pager on$$;$m$;
---select $m$select $$\d+ :res$$;$m$;
---select $m$select $$\pset pager off$$;$m$;
 select $m$ select $$select reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int as n_live_tuples,
   relpages as n_pages,
   pg_size_pretty(pg_relation_size(pg_class.oid)) as tbl_size,
@@ -593,12 +615,9 @@ select $m$ select $$select reltuples/relpages*pg_relation_size(pg_class.oid)/(se
 from pg_class
 where oid = $$||:oid||';'; $m$;
 
-
---select $m$ select $$select reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int as n_live_tuples, pg_size_pretty(pg_relation_size(pg_class.oid)) as size, relpages as n_pages  from pg_class where oid = $$||:oid||';'; $m$;
 select $m$ select $$select pgc.relname as index_name, pg_size_pretty(pg_relation_size(indexrelid)) index_size from pg_index pgi inner join pg_class pgc on pgi.indexrelid = pgc.oid where pgi.indrelid = $$||:oid||';'; $m$;
 \o
 \echo 'Created ':'fname' - Create commands for delete obsolete column and indexes
 --Finish procedure
---Start procedure
 \pset format aligned
 \pset tuples_only off
