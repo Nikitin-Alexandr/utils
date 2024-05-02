@@ -294,7 +294,7 @@ select '\set cnt_err_vac 0'||E'\n';
 
 \elif :batch_field_is_int
   /*integer or bigint*/
-  select max(:"batch_field_name") + :batch_size_int::int + 100000 as max_value, min(:"batch_field_name") as min_value from :"schema_name".:"tbl_name" \gset
+  select least(max(:"batch_field_name")::bigint + :batch_size_int::int + 100000, 2^31-1) as max_value, min(:"batch_field_name") as min_value from :"schema_name".:"tbl_name" \gset
   select format('update %I.%I set %I = %I where %I is distinct from %I and %I >= %s and %I < %s;',
                  :'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',:'batch_field_name',batch_start,:'batch_field_name', batch_start+:batch_size_int::int)||
   case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
