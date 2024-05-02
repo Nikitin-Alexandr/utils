@@ -299,7 +299,7 @@ select '\set cnt_err_vac 0'||E'\n';
                  :'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',:'batch_field_name',batch_start,:'batch_field_name', batch_start+:batch_size_int::int)||
   case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
     format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as rows_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,',
-      batch_start,:'max_value', (batch_start -:min_value)*100/(:max_value - :min_value))||
+      batch_start,:'max_value', (batch_start::bigint - :min_value)*100/(:max_value - :min_value))||
     format(' date_trunc(''sec'',(%s - %s)*(now()-:''start_time''::timestamp)/(%s - %s) - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',
       :'max_value', :'min_value', batch_start, :'min_value', :pg_sleep_value)
   else '' end ||
