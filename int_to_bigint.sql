@@ -382,6 +382,24 @@ select $$select 'Please check index and constraint list on step 3!' as "Notice";
 --Pullout of all indexes, that are related to the field that we’ve migrated.
 select substr(md5(random()::text), 1, 5) as rnd_str \gset
 select format('migr_%s_step_3.sql',:'tbl_name') as fname \gset
+/*Создаём таблицу idx_name, md5(idx_name) и наполняем её:*/
+
+select E'\n'||'Creating temporary table for indexes:';
+create temporary table idx_name_tmp(idx_name text, md5_idx_name text);
+
+insert into idx_name_tmp
+select pgc.relname, md5(pgc.relname)
+from pg_index pgi
+        inner join pg_class pgc on pgi.indexrelid = pgc.oid
+where indexrelid in (select indexrelid from pg_stat_all_indexes where relid = :oid) and
+        (select attnum
+                from pg_attribute
+                where attrelid = :oid and attnum > 0 and attname = :'col_name') = any (string_to_array(indkey::text, ' ')::int2[])
+union
+select indexname, md5(indexname)
+from pg_indexes
+where tablename=:'tbl_name' and schemaname = :'schema_name' and (indexdef like '%WHERE%') and (split_part(indexdef,' USING ', 2) like  '%('||quote_ident(:'col_name')||' %' or split_part(indexdef,' USING ', 2) like '% '||quote_ident(:'col_name')||')%');
+
 \out ./:fname
 --We retrieve indexes built in our field (excluding indexes where this field is specified in the conditions)
 /*
@@ -390,8 +408,8 @@ select format('migr_%s_step_3.sql',:'tbl_name') as fname \gset
 3) ", id)" -> ", new_id)"
 4) ", id," -> ", new_id,"
 */
-
-select replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 1), 'INDEX', 'INDEX CONCURRENTLY'), pgc.relname, '_'||pgc.relname)||' USING '||
+--select replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 1), 'INDEX', 'INDEX CONCURRENTLY'), pgc.relname, quote_ident(md5(pgc.relname)))||' USING '||
+select replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 1), 'INDEX', 'INDEX CONCURRENTLY'), pgc.relname, quote_ident(md5(pgc.relname))),'""','"')||' USING '||
 replace(replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 2),
    '('||quote_ident(:'col_name')||',','('||quote_ident(:'new_colname')||','),
    '('||quote_ident(:'col_name')||')', '('||quote_ident(:'new_colname')||')'),
@@ -409,7 +427,8 @@ Only partitial indexes
 1) "(id " -> "(new_id "
 2) " id)" -> " new_id)"
 */
-select split_part(replace(replace(indexdef, 'INDEX', 'INDEX CONCURRENTLY'), indexname, '_'||indexname),' USING ', 1)||' USING '||
+--select split_part(replace(replace(indexdef, 'INDEX', 'INDEX CONCURRENTLY'), indexname, quote_ident(md5(indexname))),' USING ', 1)||' USING '||
+select replace(split_part(replace(replace(indexdef, 'INDEX', 'INDEX CONCURRENTLY'), indexname, quote_ident(md5(indexname))),' USING ', 1),'""','"')||' USING '||
 replace(replace(split_part(indexdef,' USING ', 2),
   '('||quote_ident(:'col_name')||' ','('||quote_ident(:'new_colname')||' '),
   ' '||quote_ident(:'col_name')||')',' '||quote_ident(:'new_colname')||')')||';'
@@ -469,8 +488,9 @@ FROM (
     AND attname=:'col_name' AND a.attnum > 0 AND NOT a.attisdropped) AS t \gset
 
 --Finding index name, based on which a new PK will be built
-select '_'||relname as new_pk_idx
-from pg_class
+select md5_idx_name as new_pk_idx
+from pg_class pgc
+        inner join idx_name_tmp idx on pgc.relname = idx.idx_name
 where oid = (select indexrelid from pg_index where indrelid = (select oid from pg_class where oid = :oid) and indisprimary) \gset
 
 --Locating sequence name
@@ -492,7 +512,7 @@ select :'seq_name' = '' as res \gset
 \endif
 
 --Foreign keys
-
+select E'\n'||'Creating temporary table for constraints:';
 create temporary table fk_names_tmp(type int, command text, fk_name text, relname text, condef text);
 
 insert into fk_names_tmp SELECT 1, 'alter table '||conrelid::pg_catalog.regclass::text||' drop constraint '||quote_ident(conname)||';',
@@ -590,6 +610,8 @@ from pg_indexes
 where schemaname=:'schema_name' and tablename=:'tbl_name' and (indexdef like '%('||:'old_colname'||'%' or indexdef like '%'||:'old_colname'||',%' or indexdef like '%'||:'old_colname'||')%' or
 indexdef like '%("'||:'old_colname'||'%' or indexdef like '%"'||:'old_colname'||'",%' or indexdef like '%'||:'old_colname'||'")%');$$;
 select '';
+
+select 'select $$alter index '||quote_ident(:'schema_name')||'.'||quote_ident(md5_idx_name)||' rename to '||quote_ident(idx_name)||';$$;' from idx_name_tmp where md5_idx_name != :'new_pk_idx';
 
 --Remove the old field
 select $$select 'SET statement_timeout to ''1000ms'';';$$;
