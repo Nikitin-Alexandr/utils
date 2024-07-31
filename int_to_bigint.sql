@@ -268,7 +268,7 @@ select '\set cnt_err_vac 0'||E'\n';
   select format('update %I.%I set %I = %I where %I is distinct from %I and ctid >=''(%s,0)'' and ctid<''(%s,0)'';',:'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',batch_start,batch_start+:batch_size)||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
       format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as pages_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,
-        date_trunc(''sec'',(now()-:''start_time''::timestamp)/round(%s*100/%s,1)*100 - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',batch_start,:n_pages,round(batch_start*100/:n_pages,1),batch_start,:n_pages,:pg_sleep_value) else '' end ||
+        date_trunc(''sec'',(now()-:''start_time''::timestamp)/round(%s*100/%s,1)*100 - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',batch_start,:n_pages,round(batch_start::bigint*100/:n_pages,1),batch_start,:n_pages,:pg_sleep_value) else '' end ||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % 10 = 0 then
       format(E'\n'||
           'select n_dead_tup >= %s as res from pg_stat_all_tables where relid = %s \gset',:vacuum_batch, :oid)||E'\n'||
