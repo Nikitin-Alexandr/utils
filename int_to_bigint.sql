@@ -68,7 +68,7 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
   --If version 14 or older choose a specific field and set a range for it
   --The range should be integer or date
   \set ver_14 false
-  \echo -n 'Field name that will be used to split data into equal batches (type: integer, bigint, date, timestamp): [':'col_name']:
+  \echo -n 'Field name that will be used to split data into equal batches (type: integer, , date, timestamp): [':'col_name']:
   \prompt ' ' batch_field_name
   --\set batch_field_name created_at
 
@@ -97,8 +97,8 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
     \echo 'Consider using another field as the field will need to be split into batches, otherwise the process can be VERY slow'
   \endif
 
-  --If the specified field has type integer or bigint
-  select (data_type = 'integer' or data_type = 'bigint') as res from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'batch_field_name' \gset
+  --If the specified field has type integer or 
+  select (data_type = 'integer' or data_type = '') as res from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'batch_field_name' \gset
   \if :res
     \set batch_field_is_int true
     --Set the batch size
@@ -115,7 +115,7 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
     \endif
   \else
      \set batch_field_is_int false
-     --If not integer or bigint
+     --If not integer or 
      select data_type in('date', 'timestamp with time zone', 'timestamp without time zone') as res from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'batch_field_name' \gset
      \if :res
        --If type of the field related to a date
@@ -230,7 +230,7 @@ select format('migr_%s_step_1.sql',:'tbl_name') as fname \gset
 \out ./:fname
 select 'begin;';
 select '  set local statement_timeout to ''1000ms'';';
-select format('  alter table %I.%I add column %I bigint;'||E'\n',:'schema_name',:'tbl_name',:'new_colname');
+select format('  alter table %I.%I add column %I ;'||E'\n',:'schema_name',:'tbl_name',:'new_colname');
 
 select format(
 '  CREATE FUNCTION %I."%s_migr_f"()
@@ -268,7 +268,7 @@ select '\set cnt_err_vac 0'||E'\n';
   select format('update %I.%I set %I = %I where %I is distinct from %I and ctid >=''(%s,0)'' and ctid<''(%s,0)'';',:'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',batch_start,batch_start+:batch_size)||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
       format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as pages_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,
-        date_trunc(''sec'',(now()-:''start_time''::timestamp)/round(%s*100/%s,1)*100 - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',batch_start,:n_pages,round(batch_start::bigint*100/:n_pages,1),batch_start,:n_pages,:pg_sleep_value) else '' end ||
+        date_trunc(''sec'',(now()-:''start_time''::timestamp)/round(%s*100.0/%s,1)*100 - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',batch_start,:n_pages,round(batch_start*100.0/:n_pages,1),batch_start,:n_pages,:pg_sleep_value) else '' end ||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % 10 = 0 then
       format(E'\n'||
           'select n_dead_tup >= %s as res from pg_stat_all_tables where relid = %s \gset',:vacuum_batch, :oid)||E'\n'||
@@ -299,7 +299,7 @@ select '\set cnt_err_vac 0'||E'\n';
                  :'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',:'batch_field_name',batch_start,:'batch_field_name', batch_start+:batch_size_int::int)||
   case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
     format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as rows_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,',
-      batch_start,:'max_value', (batch_start::bigint - :min_value)*100/(:max_value - :min_value))||
+      batch_start,:'max_value', (batch_start::bigint - :min_value)*100.0/(:max_value - :min_value))||
     format(' date_trunc(''sec'',(%s - %s)*(now()-:''start_time''::timestamp)/(%s - %s) - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',
       :'max_value', :'min_value', batch_start, :'min_value', :pg_sleep_value)
   else '' end ||
