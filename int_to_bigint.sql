@@ -68,7 +68,7 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
   --If version 14 or older choose a specific field and set a range for it
   --The range should be integer or date
   \set ver_14 false
-  \echo -n 'Field name that will be used to split data into equal batches (type: integer, , date, timestamp): [':'col_name']:
+  \echo -n 'Field name that will be used to split data into equal batches (type: integer, date, timestamp): [':'col_name']:
   \prompt ' ' batch_field_name
   --\set batch_field_name created_at
 
