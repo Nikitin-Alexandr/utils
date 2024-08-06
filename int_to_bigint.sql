@@ -68,7 +68,7 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
   --If version 14 or older choose a specific field and set a range for it
   --The range should be integer or date
   \set ver_14 false
-  \echo -n 'Field name that will be used to split data into equal batches (type: integer, date, timestamp): [':'col_name']:
+  \echo -n 'Field name that will be used to split data into equal batches (type: integer, bigint, date, timestamp): [':'col_name']:
   \prompt ' ' batch_field_name
   --\set batch_field_name created_at
 
@@ -97,8 +97,8 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
     \echo 'Consider using another field as the field will need to be split into batches, otherwise the process can be VERY slow'
   \endif
 
-  --If the specified field has type integer or 
-  select (data_type = 'integer' or data_type = '') as res from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'batch_field_name' \gset
+  --If the specified field has type integer or bigint
+  select (data_type = 'integer' or data_type = 'bigint') as res from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'batch_field_name' \gset
   \if :res
     \set batch_field_is_int true
     --Set the batch size
@@ -115,7 +115,7 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
     \endif
   \else
      \set batch_field_is_int false
-     --If not integer or 
+     --If not integer or bigint
      select data_type in('date', 'timestamp with time zone', 'timestamp without time zone') as res from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'batch_field_name' \gset
      \if :res
        --If type of the field related to a date
