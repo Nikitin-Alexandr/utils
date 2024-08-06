@@ -230,7 +230,7 @@ select format('migr_%s_step_1.sql',:'tbl_name') as fname \gset
 \out ./:fname
 select 'begin;';
 select '  set local statement_timeout to ''1000ms'';';
-select format('  alter table %I.%I add column %I ;'||E'\n',:'schema_name',:'tbl_name',:'new_colname');
+select format('  alter table %I.%I add column %I bigint;'||E'\n',:'schema_name',:'tbl_name',:'new_colname');
 
 select format(
 '  CREATE FUNCTION %I."%s_migr_f"()
