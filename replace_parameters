@@ -1,0 +1,22 @@
+CREATE OR REPLACE FUNCTION replace_parameters (query text, parameters text)
+        RETURNS TEXT
+        AS $body$
+DECLARE
+	rec record;
+	SQL text;
+BEGIN
+    SQL := '';
+    FOR rec IN (
+        SELECT
+          array_to_string(REGEXP_MATCHES(parameters, '(?<=\$)(\d+)(?=\ =\ )', 'g'), ';') AS arg_no,
+		  array_to_string(REGEXP_MATCHES(parameters, '(?<=\= )(.*?)(?=(,\ \$\d+|$))', 'g'), ';') AS arg_val)
+          LOOP
+			SQL:=regexp_replace(query, '\$'||rec.arg_no||'(?!\d)', rec.arg_val,'g'); 
+			query := sql;
+          END LOOP;
+    return sql;
+END;
+$body$
+LANGUAGE 'plpgsql';  
+
+/*Example: select replace_parameters($$query$$,$$parameters$$);*/
