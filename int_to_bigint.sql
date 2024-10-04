@@ -43,8 +43,6 @@ select data_type != 'integer' as res from information_schema.columns where table
   \q
 \endif
 
-select pgc.oid as oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name' \gset
-
 \set new_colname new_:col_name
 \set old_colname old_:col_name
 
@@ -116,7 +114,7 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
   \else
      \set batch_field_is_int false
      --If not integer or bigint
-     select data_type in('date', 'timestamp with time zone', 'timestamp without time zone') as res from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'batch_field_name' \gset
+     select data_type in('date', 'timestamp with time zone', 'timestamp without time zone') as res from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'batch_f           ield_name' \gset
      \if :res
        --If type of the field related to a date
        --Set batch size in the standard interval description
@@ -211,7 +209,7 @@ select round((reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_
 \echo
 \echo ========================
 \echo Information about table:
-select reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int as n_live_tuples,
+select (reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int)::int as n_live_tuples,
   relpages as n_pages,
   pg_size_pretty(pg_relation_size(pg_class.oid)) as tbl_size,
   pg_size_pretty(pg_indexes_size(pg_class.oid)) as indexes_size,
@@ -265,10 +263,10 @@ select '\set cnt_err_vac 0'||E'\n';
 \if :ver_14
   /*ctid*/
   select relpages+10000 as n_pages from pg_class where oid = :oid \gset
-  select format('update %I.%I set %I = %I where %I is distinct from %I and ctid >=''(%s,0)'' and ctid<''(%s,0)'';',:'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',batch_start,batch_start+:batch_size)||
+  select format('update %I.%I set %I = %I where %I is distinct from %I and ctid >=''(%s,0)'' and ctid<''(%s,0)'';',:'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',batch_start,batch_start+:ba           tch_size)||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
       format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as pages_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,
-        date_trunc(''sec'',(now()-:''start_time''::timestamp)/round(%s*100.0/%s,1)*100 - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',batch_start,:n_pages,round(batch_start*100.0/:n_pages,1),batch_start,:n_pages,:pg_sleep_value) else '' end ||
+        date_trunc(''sec'',(now()-:''start_time''::timestamp)/round(%s*100.0/%s,1)*100 - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',batch_start,:n_pages,round(batch_start*100.0/:n_pages           ,1),batch_start,:n_pages,:pg_sleep_value) else '' end ||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % 10 = 0 then
       format(E'\n'||
           'select n_dead_tup >= %s as res from pg_stat_all_tables where relid = %s \gset',:vacuum_batch, :oid)||E'\n'||
@@ -299,7 +297,7 @@ select '\set cnt_err_vac 0'||E'\n';
                  :'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',:'batch_field_name',batch_start,:'batch_field_name', batch_start+:batch_size_int::int)||
   case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
     format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as rows_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,',
-      batch_start,:'max_value', (batch_start::bigint - :min_value)*100.0/(:max_value - :min_value))||
+      batch_start,:'max_value', round((batch_start::bigint - :min_value)*100.0/(:max_value - :min_value),2))||
     format(' date_trunc(''sec'',(%s - %s)*(now()-:''start_time''::timestamp)/(%s - %s) - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',
       :'max_value', :'min_value', batch_start, :'min_value', :pg_sleep_value)
   else '' end ||
@@ -328,9 +326,9 @@ select '\set cnt_err_vac 0'||E'\n';
 \else
   /*date, timestamp*/
   select (max(:"batch_field_name") + :'batch_size_date'::interval*100)::date as max_value, min(:"batch_field_name")::date as min_value from :"schema_name".:"tbl_name" \gset
-  select format('update %I.%I set %I = %I where %I is distinct from %I and %I >= ''%s'' and %I < ''%s'';', :'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',:'batch_field_name',batch_start::date,:'batch_field_name', batch_start::date+:'batch_size_date'::interval)||
+  select format('update %I.%I set %I = %I where %I is distinct from %I and %I >= ''%s'' and %I < ''%s'';', :'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',:'batch_field_name',batch_start::da           te,:'batch_field_name', batch_start::date+:'batch_size_date'::interval)||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
-    format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as rows_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,',batch_start::date,:'max_value', (batch_start::date -:'min_value'::date)*100/(:'max_value'::date - :'min_value'::date))||
+    format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as rows_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,',batch_start::date,:'max_value', (batch_start::date -:'min_valu           e'::date)*100/(:'max_value'::date - :'min_value'::date))||
     format('date_trunc(''sec'',(''%s''::date - ''%s''::date)*(now()-:''start_time''::timestamp)/(''%s''::date - ''%s''::date) - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',
         :'max_value', :'min_value', batch_start, :'min_value', :pg_sleep_value)
     else '' end ||
@@ -382,24 +380,33 @@ select $$select 'Please check index and constraint list on step 3!' as "Notice";
 --Pullout of all indexes, that are related to the field that we’ve migrated.
 select substr(md5(random()::text), 1, 5) as rnd_str \gset
 select format('migr_%s_step_3.sql',:'tbl_name') as fname \gset
-/*Создаём таблицу idx_name, md5(idx_name) и наполняем её:*/
+/*Create table idx_name, md5(idx_name) and fill it in:*/
 
 select E'\n'||'Creating temporary table for indexes:';
-create temporary table idx_name_tmp(idx_name text, md5_idx_name text);
+create temporary table idx_name_tmp(indexrelid oid, relname text, md5_idx_name text);
 
 insert into idx_name_tmp
-select pgc.relname, md5(pgc.relname)
-from pg_index pgi
-        inner join pg_class pgc on pgi.indexrelid = pgc.oid
-where indexrelid in (select indexrelid from pg_stat_all_indexes where relid = :oid) and
-        (select attnum
-                from pg_attribute
-                where attrelid = :oid and attnum > 0 and attname = :'col_name') = any (string_to_array(indkey::text, ' ')::int2[])
-union
-select indexname, md5(indexname)
-from pg_indexes
-where tablename=:'tbl_name' and schemaname = :'schema_name' and (indexdef like '%WHERE%') and (split_part(indexdef,' USING ', 2) like  '%('||quote_ident(:'col_name')||' %' or split_part(indexdef,' USING ', 2) like '% '||quote_ident(:'col_name')||')%');
 
+SELECT
+    pgi.indexrelid, pgc.relname, md5(pgc.relname)
+FROM
+    pg_index pgi
+    INNER JOIN pg_class pgc ON pgi.indexrelid = pgc.oid
+WHERE
+    /*selected all indexes that belong to this table*/
+    pgi.indrelid = :oid
+    AND
+    /*Now we impose additional conditions*/
+    (
+        /*The index should be built according to our field - comparison with indkey*/
+       (SELECT attnum FROM pg_attribute WHERE attrelid = :oid AND attnum > 0 AND attname = :'col_name') = ANY (string_to_array(indkey::text, ' ')::int2[]) OR
+    /*Don't forget the functional indexes - indkey = 0*/
+       ('0' = ANY (string_to_array(indkey::text, ' ')::int2[]) AND split_part(pg_get_indexdef(indexrelid), ' USING ', 2) LIKE '%('||:'col_name'||')%') OR
+    /*And partial indexes*/
+       ((pg_get_indexdef(indexrelid) LIKE '%WHERE%')
+        AND (   split_part(pg_get_indexdef(indexrelid), ' USING ', 2) LIKE '%(' || quote_ident(:'col_name') || ' %'
+             OR split_part(pg_get_indexdef(indexrelid), ' USING ', 2) LIKE '% ' || quote_ident(:'col_name') || ')%'))
+        );
 \out ./:fname
 --We retrieve indexes built in our field (excluding indexes where this field is specified in the conditions)
 /*
@@ -408,32 +415,23 @@ where tablename=:'tbl_name' and schemaname = :'schema_name' and (indexdef like '
 3) ", id)" -> ", new_id)"
 4) ", id," -> ", new_id,"
 */
---select replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 1), 'INDEX', 'INDEX CONCURRENTLY'), pgc.relname, quote_ident(md5(pgc.relname)))||' USING '||
-select replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 1), 'INDEX', 'INDEX CONCURRENTLY'), pgc.relname, quote_ident(md5(pgc.relname))),'""','"')||' USING '||
+
+select replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 1), 'INDEX', 'INDEX CONCURRENTLY'), relname, quote_ident(md5(relname))),'""','"')||' USING '||
 replace(replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 2),
    '('||quote_ident(:'col_name')||',','('||quote_ident(:'new_colname')||','),
    '('||quote_ident(:'col_name')||')', '('||quote_ident(:'new_colname')||')'),
    ', '||quote_ident(:'col_name')||')', ', '||quote_ident(:'new_colname')||')'),
    ', '||quote_ident(:'col_name')||',',', '||quote_ident(:'new_colname')||',')||';'
-from pg_index pgi
-        inner join pg_class pgc on pgi.indexrelid = pgc.oid
-where indexrelid in (select indexrelid from pg_stat_all_indexes where relid = :oid) and
-        (select attnum
-                from pg_attribute
-                where attrelid = :oid and attnum > 0 and attname = :'col_name') = any (string_to_array(indkey::text, ' ')::int2[])
+from idx_name_tmp
+where (pg_get_indexdef(indexrelid) not like '%WHERE%')
 union
-/*
-Only partitial indexes
-1) "(id " -> "(new_id "
-2) " id)" -> " new_id)"
-*/
---select split_part(replace(replace(indexdef, 'INDEX', 'INDEX CONCURRENTLY'), indexname, quote_ident(md5(indexname))),' USING ', 1)||' USING '||
-select replace(split_part(replace(replace(indexdef, 'INDEX', 'INDEX CONCURRENTLY'), indexname, quote_ident(md5(indexname))),' USING ', 1),'""','"')||' USING '||
-replace(replace(split_part(indexdef,' USING ', 2),
-  '('||quote_ident(:'col_name')||' ','('||quote_ident(:'new_colname')||' '),
-  ' '||quote_ident(:'col_name')||')',' '||quote_ident(:'new_colname')||')')||';'
-from pg_indexes
-where tablename=:'tbl_name' and schemaname = :'schema_name' and (indexdef like '%WHERE%') and (split_part(indexdef,' USING ', 2) like  '%('||quote_ident(:'col_name')||' %' or split_part(indexdef,' USING ', 2) like '% '||quote_ident(:'col_name')||')%');
+select replace(split_part(replace(replace(pg_get_indexdef(indexrelid), 'INDEX', 'INDEX CONCURRENTLY'), relname, quote_ident(md5(relname))),' USING ', 1),'""','"')||' USING '||
+replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 2),
+'('||quote_ident(:'col_name')||' ','('||quote_ident(:'new_colname')||' '),
+' '||quote_ident(:'col_name')||')',' '||quote_ident(:'new_colname')||')')||';'
+from idx_name_tmp
+where (pg_get_indexdef(indexrelid) like '%WHERE%') and (split_part(pg_get_indexdef(indexrelid),' USING ', 2) like  '%('||quote_ident(:'col_name')||' %' or split_part(pg_get_indexdef(indexrelid),' USING ', 2) like '% '||quot           e_ident(:'col_name')||')%');
+
 
 --Created a temporary index
 select format('CREATE INDEX CONCURRENTLY "_%s_%s" on %I.%I(%I) where %I is distinct from %I;', :'tbl_name', :'rnd_str', :'schema_name', :'tbl_name', :'col_name', :'col_name', :'new_colname');
@@ -443,17 +441,17 @@ select '--Please check constraint list:';
 --Check the number of constants, and if it is not equal to 0, then enclose the next block in begin/end
 select count(*)!=0 as res FROM pg_catalog.pg_constraint r
 WHERE r.conrelid = :oid AND r.contype = 'c'
-and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_name')||' ' or
+and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_name')||' %' or
      pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||' %' or
      pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||')%') \gset
 
 \if :res
   select $$begin;$$;
   select $$  set local statement_timeout = '1s';$$;
-  SELECT format('  alter table %I.%I add constraint ',:'schema_name',:'tbl_name')||r.conname||'_new '||trim(trailing 'NOT VALID' from replace(pg_catalog.pg_get_constraintdef(r.oid, true), :'col_name', :'new_colname'))||' not valid;'
+  SELECT format('  alter table %I.%I add constraint ',:'schema_name',:'tbl_name')||r.conname||'_new '||trim(trailing 'NOT VALID' from replace(pg_catalog.pg_get_constraintdef(r.oid, true), :'col_name', :'new_colname'))||' no           t valid;'
   FROM pg_catalog.pg_constraint r
   WHERE r.conrelid = :oid AND r.contype = 'c'
-  and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_name')||' ' or
+  and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_name')||' %' or
        pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||' %' or
        pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||')%')
   ORDER BY 1;
@@ -473,8 +471,26 @@ select attnotnull as res from pg_attribute where attrelid = :oid and attname = :
 \o
 \echo 'Created ':'fname' - Indexes and constraints
 
---Finding PrimaryKey
-select conname as pk_name from pg_constraint where conrelid = :oid and contype = 'p' \gset
+--Finding PrimaryKey with our col_name
+\set new_pk_idx ''
+select count(*) cnt from pg_constraint pgc
+  inner join pg_attribute pga on pgc.conrelid = pga.attrelid
+where pgc.conrelid = :oid and contype = 'p' and attnum = any (conkey) and attname = :'col_name' \gset
+
+select :cnt = 1 as res \gset
+\if :res
+  --If such a PK is found, then write its name to pk_name, otherwise leave this variable empty
+    select pgc.conname as pk_name
+    from pg_constraint pgc
+      inner join pg_attribute pga on pgc.conrelid = pga.attrelid
+    where pgc.conrelid = :oid and contype = 'p' and attnum = any (conkey) and attname = :'col_name' \gset
+
+    --Finding index name, based on which a new PK will be built
+    select md5_idx_name as new_pk_idx
+    from pg_class pgc
+            inner join idx_name_tmp idx on pgc.relname = idx.relname
+    where oid = (select indexrelid from pg_index where indrelid = (select oid from pg_class where oid = :oid) and indisprimary) \gset
+\endif
 
 -- Finding default value
 SELECT default_value, default_value IS NOT NULL AS default_value_exists
@@ -487,28 +503,35 @@ FROM (
   WHERE a.attrelid = :oid
     AND attname=:'col_name' AND a.attnum > 0 AND NOT a.attisdropped) AS t \gset
 
---Finding index name, based on which a new PK will be built
-select md5_idx_name as new_pk_idx
-from pg_class pgc
-        inner join idx_name_tmp idx on pgc.relname = idx.idx_name
-where oid = (select indexrelid from pg_index where indrelid = (select oid from pg_class where oid = :oid) and indisprimary) \gset
-
 --Locating sequence name
-SELECT
-  split_part((SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef),chr(39),2)::regclass::oid as seq_oid,
-  split_part((SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef),chr(39),2) as seq_name
-  FROM pg_catalog.pg_attribute a
-  WHERE a.attrelid = :oid
-    AND a.attname=:'col_name' AND a.attnum > 0 AND NOT a.attisdropped AND a.atthasdef \gset
+\set seq_name ''
+\set ident_name ''
+\set ident_type ''
+
+SELECT count(*) as cnt
+FROM pg_catalog.pg_attribute a
+WHERE a.attrelid = :oid
+  AND a.attname=:'col_name' AND a.attnum > 0 AND NOT a.attisdropped AND a.atthasdef \gset
+
+select :cnt = 1 as res \gset
+\if :res
+  SELECT
+    split_part((SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef),chr(39),2)::regclass::oid as seq_oid,
+    split_part((SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid, true) FROM pg_catalog.pg_attrdef d WHERE d.adrelid = a.attrelid AND d.adnum = a.attnum AND a.atthasdef),chr(39),2) as seq_name
+    FROM pg_catalog.pg_attribute a
+    WHERE a.attrelid = :oid
+      AND a.attname=:'col_name' AND a.attnum > 0 AND NOT a.attisdropped AND a.atthasdef \gset
+\endif
 
 select :'seq_name' = '' as res \gset
 \if :res
-  --!!! С последовательностями через identity разобраться отдельно.
-  \echo 'Возможно последовательность задана через identity'
-   select split_part(pg_get_serial_sequence('"'||:'tbl_name'||'"',:'col_name'), '.', 2)) a where a.seq_name is not null and trim (both from a.seq_name) != '' \gset
-  \set is_seq false
-\else
-  \set is_seq true
+  -- If identity
+  select count(*) as cnt from pg_attribute where attrelid = :oid and attname = :'col_name' and attidentity != '' \gset
+  select :cnt = 1 as res \gset
+  \if :res
+        select split_part(pg_get_serial_sequence(quote_ident(:'schema_name')||'.'||quote_ident(:'tbl_name'), :'col_name'), '.', 2) as ident_name \gset
+        select case attidentity when 'd' then 'by default' when 'a' then 'always' end as ident_type from pg_attribute where attrelid = :oid and attname = :'col_name' \gset
+  \endif
 \endif
 
 --Foreign keys
@@ -548,28 +571,65 @@ select '\timing on';
 select 'BEGIN;';
 select '  set local statement_timeout to ''20s'';';
 select format('  lock table  %I.%I in access exclusive mode;',      :'schema_name', :'tbl_name');
-select format('  alter table %I.%I drop constraint %I;',          :'schema_name', :'tbl_name', :'pk_name');
+
+--PK removal is only necessary if pk is actually affected
+\if :{?pk_name}
+  select format('  aLter table %I.%I drop constraint %I;',          :'schema_name', :'tbl_name', :'pk_name');
+\endif
+
 select '  '||command from fk_names_tmp where type = 1;
-select format('  alter table %I.%I alter %I drop default;',       :'schema_name', :'tbl_name', :'col_name');
-select format('  alter table %I.%I alter %I drop not null;',:'schema_name', :'tbl_name', :'col_name');
-select format('  alter table %I.%I alter %I set not null;',:'schema_name', :'tbl_name', :'new_colname');
-select format('  alter table %I.%I drop constraint %s_%s_not_null;',:'schema_name', :'tbl_name', :'tbl_name', :'new_colname');
+--IF generated as identity
+select :'ident_name' != '' as res \gset
+\if :res
+  select format('  select max(%I) + 1 as start_new_id from %I.%I \gset',:'col_name',:'schema_name',:'tbl_name');
+  select format('  alter table %I.%I alter column %I drop identity;', :'schema_name', :'tbl_name', :'col_name');
+\else
+  --It won't do any harm, even if it's not set
+  select format('  alter table %I.%I alter %I drop default;',       :'schema_name', :'tbl_name', :'col_name');
+  select format('  alter table %I.%I alter %I drop not null;',:'schema_name', :'tbl_name', :'col_name');
+\endif
+
+-- not null
+select attnotnull as res from pg_attribute where attrelid = :oid and attnum >=0 and attname = :'col_name' \gset
+\if :res
+  select format('  alter table %I.%I alter %I set not null;',:'schema_name', :'tbl_name', :'new_colname');
+\endif
+
+select attnotnull as res from pg_attribute where attrelid = :oid and attname = :'col_name' and attnum > 0 \gset
+\if :res
+  select format('  Alter table %I.%I drop constraint if exists %s_%s_not_null;',:'schema_name', :'tbl_name', :'tbl_name', :'new_colname');
+\endif
+
 select format('  alter table %I.%I rename %I to %I;',           :'schema_name', :'tbl_name', :'col_name', :'old_colname');
 select format('  alter table %I.%I rename %I to %I;',           :'schema_name', :'tbl_name', :'new_colname', :'col_name');
 \if :default_value_exists
   select format('  ALTER TABLE %I.%I ALTER %I SET DEFAULT %s;',:'schema_name', :'tbl_name', :'col_name', :'default_value');
 \endif
-select format('  alter sequence %s owned by %I.%I.%I;', :'seq_name', :'schema_name', :'tbl_name', :'col_name');
-select format('  SELECT pg_catalog.format_type(seqtypid, NULL)=''integer'' as res FROM pg_catalog.pg_sequence WHERE seqrelid = %s \gset',:'seq_oid');
-select '  \if :res';
-select format('    alter sequence %s as bigint;',:'seq_name');
-select '  \endif';
-select format('  SELECT seqmax != 9223372036854775807 as res FROM pg_catalog.pg_sequence WHERE seqrelid = %s \gset',:'seq_oid');
-select '  \if :res';
-select format('    Select $$Обратите внимание! У последовательности задан верхний порог отличный от стандартного. $$||E''\n''||$$Возможно, стоит выполнить команду alter sequence %I no maxvalue;$$ as "Notice";',:'seq_name');
-select '  \endif';
 
-select format('  alter table %I.%I add constraint %I primary key using index %I;',:'schema_name', :'tbl_name', :'pk_name', :'new_pk_idx');
+--If the sequence name is not specified, then the next block of code is not executed
+select :'seq_name' != '' as res \gset
+\if :res
+  select format('  alter sequence %s owned by %I.%I.%I;', :'seq_name', :'schema_name', :'tbl_name', :'col_name');
+  select format('  SELECT pg_catalog.format_type(seqtypid, NULL)=''integer'' as res FROM pg_catalog.pg_sequence WHERE seqrelid = %s \gset',:'seq_oid');
+  select '  \if :res';
+  select format('    alter sequence %s as bigint;',:'seq_name');
+  select '  \endif';
+  select format('  SELECT seqmax != 9223372036854775807 as res FROM pg_catalog.pg_sequence WHERE seqrelid = %s \gset',:'seq_oid');
+  select '  \if :res';
+  select format('    Select $$Обратите внимание! У последовательности задан верхний порог отличный от стандартного. $$||E''\n''||$$Возможно, стоит выполнить команду alter sequence %I no maxvalue;$$ as "Notice";',:'seq_name'           );
+  select '  \endif';
+\endif
+
+--If  generated as identity
+select :'ident_name' != '' as res \gset
+\if :res
+  select format('  alter table %I.%I alter column %I add generated %s as identity (start with :start_new_id);',:'schema_name', :'tbl_name',:'col_name', :'ident_type');
+\endif
+
+\if :{?pk_name}
+  select format('  alter table %I.%I add constraint %I primary key using index %I;',:'schema_name', :'tbl_name', :'pk_name', :'new_pk_idx');
+\endif
+
 select '  '||command from fk_names_tmp where type = 2;
 select format('  drop trigger "%s_migr_t" on %I.%I;', :'tbl_name', :'schema_name', :'tbl_name');
 select format('  drop function %I."%s_migr_f"();',:'schema_name',:'tbl_name');
@@ -611,7 +671,7 @@ where schemaname=:'schema_name' and tablename=:'tbl_name' and (indexdef like '%(
 indexdef like '%("'||:'old_colname'||'%' or indexdef like '%"'||:'old_colname'||'",%' or indexdef like '%'||:'old_colname'||'")%');$$;
 select '';
 
-select 'select $$alter index '||quote_ident(:'schema_name')||'.'||quote_ident(md5_idx_name)||' rename to '||quote_ident(idx_name)||';$$;' from idx_name_tmp where md5_idx_name != :'new_pk_idx';
+select 'select $$alter index '||quote_ident(:'schema_name')||'.'||quote_ident(md5_idx_name)||' rename to '||quote_ident(relname)||';$$;' from idx_name_tmp where md5_idx_name != :'new_pk_idx';
 
 --Remove the old field
 select $$select 'SET statement_timeout to ''1000ms'';';$$;
@@ -632,7 +692,7 @@ select $$select '--Information about table:' as "Notice";$$||E'\n';
 --Information about table:
 select $$select '\pset format aligned';$$;
 select $$select '\pset tuples_only off';$$;
-select $m$ select $$select reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int as n_live_tuples,
+select $m$ select $$select (reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int)::int as n_live_tuples,
   relpages as n_pages,
   pg_size_pretty(pg_relation_size(pg_class.oid)) as tbl_size,
   pg_size_pretty(pg_indexes_size(pg_class.oid)) as indexes_size,
