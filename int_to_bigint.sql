@@ -114,7 +114,7 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
   \else
      \set batch_field_is_int false
      --If not integer or bigint
-     select data_type in('date', 'timestamp with time zone', 'timestamp without time zone') as res from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'batch_f           ield_name' \gset
+     select data_type in('date', 'timestamp with time zone', 'timestamp without time zone') as res from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'batch_field_name' \gset
      \if :res
        --If type of the field related to a date
        --Set batch size in the standard interval description
@@ -263,10 +263,10 @@ select '\set cnt_err_vac 0'||E'\n';
 \if :ver_14
   /*ctid*/
   select relpages+10000 as n_pages from pg_class where oid = :oid \gset
-  select format('update %I.%I set %I = %I where %I is distinct from %I and ctid >=''(%s,0)'' and ctid<''(%s,0)'';',:'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',batch_start,batch_start+:ba           tch_size)||
+  select format('update %I.%I set %I = %I where %I is distinct from %I and ctid >=''(%s,0)'' and ctid<''(%s,0)'';',:'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',batch_start,batch_start+:batch_size)||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
       format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as pages_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,
-        date_trunc(''sec'',(now()-:''start_time''::timestamp)/round(%s*100.0/%s,1)*100 - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',batch_start,:n_pages,round(batch_start*100.0/:n_pages           ,1),batch_start,:n_pages,:pg_sleep_value) else '' end ||
+        date_trunc(''sec'',(now()-:''start_time''::timestamp)/round(%s*100.0/%s,1)*100 - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',batch_start,:n_pages,round(batch_start*100.0/:n_pages,1),batch_start,:n_pages,:pg_sleep_value) else '' end ||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % 10 = 0 then
       format(E'\n'||
           'select n_dead_tup >= %s as res from pg_stat_all_tables where relid = %s \gset',:vacuum_batch, :oid)||E'\n'||
@@ -326,9 +326,9 @@ select '\set cnt_err_vac 0'||E'\n';
 \else
   /*date, timestamp*/
   select (max(:"batch_field_name") + :'batch_size_date'::interval*100)::date as max_value, min(:"batch_field_name")::date as min_value from :"schema_name".:"tbl_name" \gset
-  select format('update %I.%I set %I = %I where %I is distinct from %I and %I >= ''%s'' and %I < ''%s'';', :'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',:'batch_field_name',batch_start::da           te,:'batch_field_name', batch_start::date+:'batch_size_date'::interval)||
+  select format('update %I.%I set %I = %I where %I is distinct from %I and %I >= ''%s'' and %I < ''%s'';', :'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',:'batch_field_name',batch_start::date,:'batch_field_name', batch_start::date+:'batch_size_date'::interval)||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
-    format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as rows_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,',batch_start::date,:'max_value', (batch_start::date -:'min_valu           e'::date)*100/(:'max_value'::date - :'min_value'::date))||
+    format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as rows_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,',batch_start::date,:'max_value', (batch_start::date -:'min_value'::date)*100/(:'max_value'::date - :'min_value'::date))||
     format('date_trunc(''sec'',(''%s''::date - ''%s''::date)*(now()-:''start_time''::timestamp)/(''%s''::date - ''%s''::date) - (now()-:''start_time''::timestamp)) as estimate;'||E'\n'||'select pg_sleep(%s);',
         :'max_value', :'min_value', batch_start, :'min_value', :pg_sleep_value)
     else '' end ||
@@ -430,7 +430,7 @@ replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 2),
 '('||quote_ident(:'col_name')||' ','('||quote_ident(:'new_colname')||' '),
 ' '||quote_ident(:'col_name')||')',' '||quote_ident(:'new_colname')||')')||';'
 from idx_name_tmp
-where (pg_get_indexdef(indexrelid) like '%WHERE%') and (split_part(pg_get_indexdef(indexrelid),' USING ', 2) like  '%('||quote_ident(:'col_name')||' %' or split_part(pg_get_indexdef(indexrelid),' USING ', 2) like '% '||quot           e_ident(:'col_name')||')%');
+where (pg_get_indexdef(indexrelid) like '%WHERE%') and (split_part(pg_get_indexdef(indexrelid),' USING ', 2) like  '%('||quote_ident(:'col_name')||' %' or split_part(pg_get_indexdef(indexrelid),' USING ', 2) like '% '||quote_ident(:'col_name')||')%');
 
 
 --Created a temporary index
@@ -448,7 +448,7 @@ and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_n
 \if :res
   select $$begin;$$;
   select $$  set local statement_timeout = '1s';$$;
-  SELECT format('  alter table %I.%I add constraint ',:'schema_name',:'tbl_name')||r.conname||'_new '||trim(trailing 'NOT VALID' from replace(pg_catalog.pg_get_constraintdef(r.oid, true), :'col_name', :'new_colname'))||' no           t valid;'
+  SELECT format('  alter table %I.%I add constraint ',:'schema_name',:'tbl_name')||r.conname||'_new '||trim(trailing 'NOT VALID' from replace(pg_catalog.pg_get_constraintdef(r.oid, true), :'col_name', :'new_colname'))||' not valid;'
   FROM pg_catalog.pg_constraint r
   WHERE r.conrelid = :oid AND r.contype = 'c'
   and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_name')||' %' or
@@ -616,7 +616,7 @@ select :'seq_name' != '' as res \gset
   select '  \endif';
   select format('  SELECT seqmax != 9223372036854775807 as res FROM pg_catalog.pg_sequence WHERE seqrelid = %s \gset',:'seq_oid');
   select '  \if :res';
-  select format('    Select $$Обратите внимание! У последовательности задан верхний порог отличный от стандартного. $$||E''\n''||$$Возможно, стоит выполнить команду alter sequence %I no maxvalue;$$ as "Notice";',:'seq_name'           );
+  select format('    Select $$Обратите внимание! У последовательности задан верхний порог отличный от стандартного. $$||E''\n''||$$Возможно, стоит выполнить команду alter sequence %I no maxvalue;$$ as "Notice";',:'seq_name');
   select '  \endif';
 \endif
 
