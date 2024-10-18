@@ -205,11 +205,21 @@ select :'vacuum_cost_delay' = '' as res \gset
 \endif
 
 --We obtained the threshold of n_dead_tuples after which vacuum will be triggered (with a possible deviation of +10 batches).
-select round((reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int) * :vacuum_interval/100) as vacuum_batch from pg_class where oid = :oid \gset
+\set vacuum_batch 1
+select relpages != 0 as res from pg_class where oid = :oid \gset
+\if :res
+  select round((reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int) * :vacuum_interval/100) as vacuum_batch from pg_class where oid = :oid \gset
+\endif 
+
 \echo
 \echo ========================
 \echo Information about table:
-select (reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int)::int as n_live_tuples,
+select 
+  case 
+	when reltuples <= 0 then 0
+  else 
+	  (reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int)::int 
+  end as n_live_tuple,
   relpages as n_pages,
   pg_size_pretty(pg_relation_size(pg_class.oid)) as tbl_size,
   pg_size_pretty(pg_indexes_size(pg_class.oid)) as indexes_size,
@@ -217,7 +227,6 @@ select (reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_settin
 from pg_class
 where oid = :oid;
 select pgc.relname as index_name, pg_size_pretty(pg_relation_size(indexrelid)) index_size from pg_index pgi inner join pg_class pgc on pgi.indexrelid = pgc.oid where pgi.indrelid = :oid;
-
 
 --Start procedure
 \pset format unaligned
@@ -694,7 +703,12 @@ select $$select '--Information about table:' as "Notice";$$||E'\n';
 --Information about table:
 select $$select '\pset format aligned';$$;
 select $$select '\pset tuples_only off';$$;
-select $m$ select $$select (reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int)::int as n_live_tuples,
+select $m$ select $$select 
+  case 
+	when reltuples <= 0 then 0
+  else 
+	  (reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int)::int 
+  end as n_live_tuple,
   relpages as n_pages,
   pg_size_pretty(pg_relation_size(pg_class.oid)) as tbl_size,
   pg_size_pretty(pg_indexes_size(pg_class.oid)) as indexes_size,
