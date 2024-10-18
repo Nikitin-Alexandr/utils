@@ -1,3 +1,4 @@
+/*sdfgsdfgsdfg*/
 \echo 'This utility helps you migrate int4 to bigint'
 
 \prompt 'Schema name: [public]: ' schema_name
