@@ -558,7 +558,7 @@ conname, conrelid::pg_catalog.regclass AS ontable,
            AND pg_catalog.pg_get_constraintdef(oid, true) like '%('||quote_ident(:'col_name')||')%'
 ORDER BY conname;
 
---Step 5. The sequence of commands for transition itself
+--Step 4. The sequence of commands for transition itself
 select format('migr_%s_step_4.sql',:'tbl_name') as fname \gset
 \out ./:fname
 
@@ -566,6 +566,7 @@ select format('migr_%s_step_4.sql',:'tbl_name') as fname \gset
 --Moving away from seq_scan - here the optimizer can mistakenly incur unnecessary costs
 select 'set enable_seqscan to 0;';
 select format('update %I.%I set %I = %I where %I is distinct from %I;',:'schema_name',:'tbl_name', :'new_colname', :'col_name', :'col_name', :'new_colname')||E'\n';
+select 'set enable_seqscan to 1;';
 select 'select now() as start_time \gset';
 select '\timing on';
 select 'BEGIN;';
@@ -574,7 +575,7 @@ select format('  lock table  %I.%I in access exclusive mode;',      :'schema_nam
 
 --PK removal is only necessary if pk is actually affected
 \if :{?pk_name}
-  select format('  aLter table %I.%I drop constraint %I;',          :'schema_name', :'tbl_name', :'pk_name');
+  select format('  alter table %I.%I drop constraint %I;',          :'schema_name', :'tbl_name', :'pk_name');
 \endif
 
 select '  '||command from fk_names_tmp where type = 1;
@@ -597,27 +598,28 @@ select attnotnull as res from pg_attribute where attrelid = :oid and attnum >=0 
 
 select attnotnull as res from pg_attribute where attrelid = :oid and attname = :'col_name' and attnum > 0 \gset
 \if :res
-  select format('  Alter table %I.%I drop constraint if exists %s_%s_not_null;',:'schema_name', :'tbl_name', :'tbl_name', :'new_colname');
+  select format('  alter table %I.%I drop constraint if exists %s_%s_not_null;',:'schema_name', :'tbl_name', :'tbl_name', :'new_colname');
 \endif
 
 select format('  alter table %I.%I rename %I to %I;',           :'schema_name', :'tbl_name', :'col_name', :'old_colname');
 select format('  alter table %I.%I rename %I to %I;',           :'schema_name', :'tbl_name', :'new_colname', :'col_name');
 \if :default_value_exists
-  select format('  ALTER TABLE %I.%I ALTER %I SET DEFAULT %s;',:'schema_name', :'tbl_name', :'col_name', :'default_value');
+  select format('  alter table %I.%I alter %I set default %s;',:'schema_name', :'tbl_name', :'col_name', :'default_value');
 \endif
 
 --If the sequence name is not specified, then the next block of code is not executed
 select :'seq_name' != '' as res \gset
 \if :res
   select format('  alter sequence %s owned by %I.%I.%I;', :'seq_name', :'schema_name', :'tbl_name', :'col_name');
-  select format('  SELECT pg_catalog.format_type(seqtypid, NULL)=''integer'' as res FROM pg_catalog.pg_sequence WHERE seqrelid = %s \gset',:'seq_oid');
-  select '  \if :res';
-  select format('    alter sequence %s as bigint;',:'seq_name');
-  select '  \endif';
-  select format('  SELECT seqmax != 9223372036854775807 as res FROM pg_catalog.pg_sequence WHERE seqrelid = %s \gset',:'seq_oid');
-  select '  \if :res';
-  select format('    Select $$Обратите внимание! У последовательности задан верхний порог отличный от стандартного. $$||E''\n''||$$Возможно, стоит выполнить команду alter sequence %I no maxvalue;$$ as "Notice";',:'seq_name');
-  select '  \endif';
+  SELECT pg_catalog.format_type(seqtypid, NULL)='integer' as res FROM pg_catalog.pg_sequence WHERE seqrelid = :'seq_oid' \gset
+  \if :res
+    select format('  alter sequence %s as bigint;',:'seq_name');
+  \endif 
+  SELECT seqmax != 9223372036854775807 as res FROM pg_catalog.pg_sequence WHERE seqrelid = :'seq_oid' \gset
+  \if :res
+    select seqmax as seqmax from pg_catalog.pg_sequence where seqrelid = :'seq_oid' \gset
+    select format('  select $$Please note! The sequence has an upper threshold (%s) set different from the standard one. $$||E''\n''||$$It may be worth running the command: alter sequence %I no maxvalue;$$ as "Notice";',:'seqmax',:'seq_name');
+  \endif
 \endif
 
 --If  generated as identity
@@ -706,3 +708,4 @@ select $m$ select $$select pgc.relname as index_name, pg_size_pretty(pg_relation
 --Finish procedure
 \pset format aligned
 \pset tuples_only off
+
