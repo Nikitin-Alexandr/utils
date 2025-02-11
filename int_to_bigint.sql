@@ -424,24 +424,7 @@ WHERE
 3) ", id)" -> ", new_id)"
 4) ", id," -> ", new_id,"
 */
-/*
-select replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 1), 'INDEX', 'INDEX CONCURRENTLY'), relname, quote_ident(md5(relname))),'""','"')||' USING '||
-replace(replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 2),
-   '('||quote_ident(:'col_name')||',','('||quote_ident(:'new_colname')||','),
-   '('||quote_ident(:'col_name')||')', '('||quote_ident(:'new_colname')||')'),
-   ', '||quote_ident(:'col_name')||')', ', '||quote_ident(:'new_colname')||')'),
-   ', '||quote_ident(:'col_name')||',',', '||quote_ident(:'new_colname')||',')||';'
-from idx_name_tmp
-where (pg_get_indexdef(indexrelid) not like '%WHERE%')
-union
-select replace(split_part(replace(replace(pg_get_indexdef(indexrelid), 'INDEX', 'INDEX CONCURRENTLY'), relname, quote_ident(md5(relname))),' USING ', 1),'""','"')||' USING '||
-replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 2),
-'('||quote_ident(:'col_name')||', ','('||quote_ident(:'new_colname')||', '),
-' '||quote_ident(:'col_name')||')',' '||quote_ident(:'new_colname')||')')||';'
-from idx_name_tmp
-where (pg_get_indexdef(indexrelid) like '%WHERE%') and (split_part(pg_get_indexdef(indexrelid),' USING ', 2) like  '%('||quote_ident(:'col_name')||',%' or split_part(pg_get_indexdef(indexrelid),' USING ', 2) like '% '||quote_ident(:'col_name')||')%');
 
-*/
 select replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 1), 'INDEX', 'INDEX CONCURRENTLY'), relname, quote_ident(md5(relname))),'""','"')||' USING '||
 replace(replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 2),
    '('||quote_ident(:'col_name')||',','('||quote_ident(:'new_colname')||','),
