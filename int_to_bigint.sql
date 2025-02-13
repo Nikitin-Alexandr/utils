@@ -282,6 +282,8 @@ select '\set cnt_err_vac 0'||E'\n';
           '\if :res'||E'\n'||
           '  reset lock_timeout;'||E'\n'||
           format('  vacuum %I.%I;',:'schema_name', :'tbl_name')||E'\n'||
+          /*pg_sleep for update n_dead_tup*/
+          format('  select pg_sleep(0.6);')||E'\n'||
           format('  select  n_dead_tup < %s as res from pg_stat_all_tables where relid = %s \gset',:vacuum_batch, :oid)||E'\n'||
           '  \if :res'||E'\n'||
           '    \set cnt_err_vac 0'||E'\n'||
@@ -316,6 +318,8 @@ select '\set cnt_err_vac 0'||E'\n';
           '\if :res'||E'\n'||
           '  reset lock_timeout;'||E'\n'||
           format('  vacuum %I.%I;',:'schema_name', :'tbl_name')||E'\n'||
+          /*pg_sleep for update n_dead_tup*/
+          format('  select pg_sleep(0.6);')||E'\n'||
           format('  select  n_dead_tup < %s as res from pg_stat_all_tables where relid = %s \gset',:vacuum_batch, :oid)||E'\n'||
           '  \if :res'||E'\n'||
           '    \set cnt_err_vac 0'||E'\n'||
@@ -347,6 +351,8 @@ select '\set cnt_err_vac 0'||E'\n';
           '\if :res'||E'\n'||
           '  reset lock_timeout;'||E'\n'||
           format('  vacuum %I.%I;',:'schema_name', :'tbl_name')||E'\n'||
+          /*pg_sleep for update n_dead_tup*/
+          format('  select pg_sleep(0.6);')||E'\n'||
           format('  select  n_dead_tup < %s as res from pg_stat_all_tables where relid = %s \gset',:vacuum_batch, :oid)||E'\n'||
           '  \if :res'||E'\n'||
           '    \set cnt_err_vac 0'||E'\n'||
