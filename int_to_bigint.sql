@@ -1,9 +1,12 @@
 \echo 'This utility helps you migrate int4 to bigint'
-
-\prompt 'Schema name: [public]: ' schema_name
-select :'schema_name' = '' as res \gset
-\if :res
-  \set schema_name public
+\if :{?schema_name}
+ /*get variable from user*/
+\else
+  \prompt 'Schema name: [public]: ' schema_name
+  select :'schema_name' = '' as res \gset
+  \if :res
+    \set schema_name public
+  \endif
 \endif
 
 --Check schema existence
@@ -13,7 +16,12 @@ select not exists (select 1 from information_schema.schemata where schema_name =
   \q
 \endif
 
-\prompt 'Table name: ' tbl_name
+\if :{?tbl_name}
+  /*get variable from user*/
+\else
+  \prompt 'Table name: ' tbl_name
+\endif
+
 --Check table existence
 select not exists (select 1 from pg_tables where tablename = :'tbl_name' and schemaname = :'schema_name') as res \gset
 \if :res
@@ -28,7 +36,11 @@ select not exists (select 1 from pg_tables where tablename = :'tbl_name' and sch
   select pgc.oid as oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name' \gset
 \endif
 
-\prompt 'int4 column name: ' col_name
+\if :{?col_name}
+ /*get variable from user*/
+\else 
+  \prompt 'int4 column name: ' col_name
+\endif 
 --Check column existence
 select not exists (select 1 from information_schema.columns where table_schema = :'schema_name' and table_name = :'tbl_name' and column_name = :'col_name') as res  \gset
 \if :res
@@ -50,7 +62,11 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
 --If version 14.0 or higher it is possible to sort by ctid
 \if :res
   \set ver_14 true
-  \prompt 'Blocks in batch [1000]: ' batch_size
+  \if :{?batch_size}
+    /*get variable from user*/
+  \else
+    \prompt 'Blocks in batch [1000]: ' batch_size
+  \endif 
   --Inquire about the number of blocks in a batch
   select :'batch_size' = '' as res \gset
   \if :res
@@ -67,7 +83,11 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
   --The range should be integer or date
   \set ver_14 false
   \echo -n 'Field name that will be used to split data into equal batches (type: integer, bigint, date, timestamp): [':'col_name']:
-  \prompt ' ' batch_field_name
+  \if :{?batch_field_name}
+   /*get variable from user*/
+  \else
+    \prompt ' ' batch_field_name
+  \endif 
   --\set batch_field_name created_at
 
   select :'batch_field_name' = '' as res \gset
@@ -150,7 +170,12 @@ select setting::int >= 140000 as res from pg_settings where name = 'server_versi
   \endif
 \endif
 
-\prompt 'Sleep after N batches [50]: ' pg_sleep_interval
+\if :{?pg_sleep_interval}
+ /*get variable from user*/
+\else
+  \prompt 'Sleep after N batches [50]: ' pg_sleep_interval
+\endif
+
 select :'pg_sleep_interval' = '' as res \gset
 \if :res
   \set pg_sleep_interval 50
@@ -162,7 +187,12 @@ select :'pg_sleep_interval' = '' as res \gset
   \endif
 \endif
 
-\prompt 'Sleep duration N sec [1]: ' pg_sleep_value
+\if :{?pg_sleep_value}
+ /*get variable from user*/
+\else
+ \prompt 'Sleep duration N sec [1]: ' pg_sleep_value
+\endif
+
 select :'pg_sleep_value' = '' as res \gset
 \if :res
   \set pg_sleep_value 1
@@ -174,7 +204,12 @@ select :'pg_sleep_value' = '' as res \gset
   \endif
 \endif
 
-\prompt 'Vacuum after every N% rows completed [10]: ' vacuum_interval
+\if :{?vacuum_interval}
+ /*get variable from user*/
+\else
+  \prompt 'Vacuum after every N% rows completed [10]: ' vacuum_interval
+\endif
+
 select :'vacuum_interval' = '' as res \gset
 \if :res
   \set vacuum_interval 10
@@ -186,7 +221,12 @@ select :'vacuum_interval' = '' as res \gset
   \endif
 \endif
 
-\prompt 'vacuum_cost_delay (0..100 ms) [0]: ' vacuum_cost_delay
+\if :{?vacuum_cost_delay}
+ /*get variable from user*/
+\else
+  \prompt 'vacuum_cost_delay (0..100 ms) [0]: ' vacuum_cost_delay
+\endif
+
 select :'vacuum_cost_delay' = '' as res \gset
 \if :res
   \set vacuum_cost_delay 0
@@ -429,6 +469,7 @@ WHERE
 2) "(id)" -> "(new_id)"
 3) ", id)" -> ", new_id)"
 4) ", id," -> ", new_id,"
+5) " id " -> " new_id "
 */
 
 select replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 1), 'INDEX', 'INDEX CONCURRENTLY'), relname, quote_ident(md5(relname))),'""','"')||' USING '||
@@ -592,18 +633,22 @@ select 'BEGIN;';
 select '  set local statement_timeout to ''20s'';';
 select format('  lock table  %I.%I in access exclusive mode;',      :'schema_name', :'tbl_name');
 
---PK removal is only necessary if pk is actually affected
-\if :{?pk_name}
-  select format('  alter table %I.%I drop constraint %I;',          :'schema_name', :'tbl_name', :'pk_name');
-\endif
-
 select '  '||command from fk_names_tmp where type = 1;
 --IF generated as identity
 select :'ident_name' != '' as res \gset
 \if :res
-  select format('  select max(%I) + 1 as start_new_id from %I.%I \gset',:'col_name',:'schema_name',:'tbl_name');
+  select format('  select nextval(''%I''::regclass) as start_new_id \gset',:'ident_name');
+  --PK removal is only necessary if pk is actually affected
+  \if :{?pk_name}
+    select format('  alter table %I.%I drop constraint %I;',          :'schema_name', :'tbl_name', :'pk_name');
+  \endif
   select format('  alter table %I.%I alter column %I drop identity;', :'schema_name', :'tbl_name', :'col_name');
+  select format('  alter table %I.%I alter %I drop not null;',:'schema_name', :'tbl_name', :'col_name');
 \else
+  --PK removal is only necessary if pk is actually affected
+  \if :{?pk_name}
+    select format('  alter table %I.%I drop constraint %I;',          :'schema_name', :'tbl_name', :'pk_name');
+  \endif
   --It won't do any harm, even if it's not set
   select format('  alter table %I.%I alter %I drop default;',       :'schema_name', :'tbl_name', :'col_name');
   select format('  alter table %I.%I alter %I drop not null;',:'schema_name', :'tbl_name', :'col_name');
