@@ -311,7 +311,7 @@ select '\set cnt_err_vac 0'||E'\n';
 
 \if :ver_14
   /*ctid*/
-  select relpages+10000 as n_pages from pg_class where oid = :oid \gset
+  select relpages+least(relpages/4, 10000) as n_pages from pg_class where oid = :oid \gset
   select format('update %I.%I set %I = %I where %I is distinct from %I and ctid >=''(%s,0)'' and ctid<''(%s,0)'';',:'schema_name',:'tbl_name',:'new_colname',:'col_name',:'col_name',:'new_colname',batch_start,batch_start+:batch_size)||
     case when ROW_NUMBER () OVER (ORDER BY batch_start) % :pg_sleep_interval = 0 then
       format(E'\n'||'select date_trunc(''sec'',now()) as now, ''%s/%s(%s%%)'' as pages_processed, date_trunc(''sec'',now()-:''start_time''::timestamp) as elapsed,
@@ -339,7 +339,7 @@ select '\set cnt_err_vac 0'||E'\n';
           '\endif'
     else ''
     end
-  from generate_series(0, (SELECT relpages+10000 FROM pg_class where oid = :oid), :batch_size) as batch_start;
+  from generate_series(0, (SELECT relpages+least(relpages/4, 10000) FROM pg_class where oid = :oid), :batch_size) as batch_start;
 
 \elif :batch_field_is_int
   /*integer or bigint*/
