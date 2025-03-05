@@ -14,7 +14,11 @@ select not exists (select 1 from information_schema.schemata where schema_name =
 \if :res
   \echo 'Can''t find schema ':'schema_name'
   \q
+\else
+  select oid as schema_oid from pg_namespace where nspname = :'schema_name' \gset
 \endif
+
+\set
 
 \if :{?tbl_name}
   /*get variable from user*/
@@ -33,7 +37,7 @@ select not exists (select 1 from pg_tables where tablename = :'tbl_name' and sch
   \d+ :res
   \pset pager off
   -- Finding the table OID
-  select pgc.oid as oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name' \gset
+  select pgc.oid as oid from pg_class pgc WHERE relname=:'tbl_name' and relnamespace = :'schema_oid' \gset
 \endif
 
 \if :{?col_name}
@@ -620,6 +624,77 @@ ORDER BY conname;
 
 --Step 4. The sequence of commands for transition itself
 select format('migr_%s_step_4.sql',:'tbl_name') as fname \gset
+/*Get related views*/
+WITH RECURSIVE dep AS (
+  SELECT classid, objid, objsubid, deptype
+  FROM pg_depend
+  WHERE refclassid = 'pg_class'::regclass AND
+  (refobjid, refobjsubid) IN (
+    SELECT attrelid, attnum
+    FROM pg_attribute
+    WHERE attrelid = :'oid' AND attname = :'col_name'
+  )
+  UNION ALL
+  SELECT pg_depend.classid, pg_depend.objid, pg_depend.objsubid, pg_depend.deptype
+  FROM dep
+  JOIN pg_depend ON dep.classid = pg_depend.refclassid AND dep.objid = pg_depend.refobjid AND dep.objsubid = pg_depend.refobjsubid
+)
+select count(*)!=0 as view_found
+FROM dep
+  CROSS JOIN pg_identify_object (classid, objid, objsubid) AS ref
+  inner join pg_class pgc on relname = split_part(trim(leading '"_RETURN" on ' from identity),'.',2) and relnamespace = :'schema_oid'
+where type = 'rule' and pgc.relkind = 'v' \gset
+
+-- if found then created temporary table
+\if :view_found
+  select substr(md5(random()::text), 1, 5) as rnd_str \gset
+  create temporary table _table_view_:rnd_str as
+  WITH RECURSIVE views_on_table AS (
+    SELECT
+        view_depend.refobjid, ARRAY[view_depend.refobjid] AS path
+    FROM
+        pg_depend AS view_depend, pg_depend AS table_depend
+    WHERE
+        -- Find the rows in pg_rewrite for 1: rows that link the table with the views that query it
+        table_depend.classid = 'pg_rewrite'::regclass
+        AND table_depend.refclassid = 'pg_class'::regclass
+                AND (table_depend.refobjid, table_depend.refobjsubid) IN (SELECT attrelid, attnum FROM pg_attribute WHERE attrelid = :'oid' AND attname = :'col_name')
+        -- And we can find 2: the pg_class entry for each of the views themselves
+        AND view_depend.classid = 'pg_rewrite'::regclass
+        AND view_depend.refclassid = 'pg_class'::regclass
+        AND view_depend.deptype = 'i'
+        AND view_depend.objid = table_depend.objid
+        AND view_depend.refobjid != table_depend.refobjid
+
+    UNION
+
+    -- Recursive term: views on the views
+    SELECT
+        view_depend.refobjid, views_on_table.path || ARRAY[view_depend.refobjid]
+    FROM
+        views_on_table, pg_depend AS view_depend, pg_depend AS table_depend
+    WHERE
+        -- Find the rows in pg_rewrite for 1: rows that link the views with other views that query it
+        table_depend.classid = 'pg_rewrite'::regclass
+        AND table_depend.refclassid = 'pg_class'::regclass
+        AND table_depend.refobjid = views_on_table.refobjid
+
+        -- And we can find 2: the pg_class entry for each of the views themselves
+        AND view_depend.classid = 'pg_rewrite'::regclass
+        AND view_depend.refclassid = 'pg_class'::regclass
+        AND view_depend.deptype = 'i'
+        AND view_depend.objid = table_depend.objid
+        AND view_depend.refobjid != table_depend.refobjid
+
+        -- Making sure to not get into an infinite cycle
+        AND NOT view_depend.refobjid = ANY(views_on_table.path)
+  )
+  SELECT array_upper(v.path,1) length_arr, refobjid, pgn.nspname as schema, pgc.relname, pg_catalog.pg_get_viewdef (pgc.oid, false)
+  FROM
+    views_on_table v
+    inner join pg_class pgc on v.refobjid = pgc.oid
+    inner join pg_namespace pgn on pgc.relnamespace = pgn.oid;
+\endif
 \out ./:fname
 
 --Updating all the fields where values in the new column and the old one do not match (to speed up the search the temporary index was created during step 3)
@@ -664,9 +739,19 @@ select attnotnull as res from pg_attribute where attrelid = :oid and attname = :
 \if :res
   select format('  alter table %I.%I drop constraint if exists %s_%s_not_null;',:'schema_name', :'tbl_name', :'tbl_name', :'new_colname');
 \endif
+/*drop related views*/
+\if :view_found
+   select format('  drop view %I.%I;',schema,relname) from _table_view_:rnd_str order by length_arr desc;
+\endif
 
 select format('  alter table %I.%I rename %I to %I;',           :'schema_name', :'tbl_name', :'col_name', :'old_colname');
 select format('  alter table %I.%I rename %I to %I;',           :'schema_name', :'tbl_name', :'new_colname', :'col_name');
+
+/*replace related views*/
+\if :view_found
+  select format('  create or replace view %I.%I as %s',schema,relname,pg_get_viewdef) from _table_view_:rnd_str order by length_arr;
+\endif
+
 \if :default_value_exists
   select format('  alter table %I.%I alter %I set default %s;',:'schema_name', :'tbl_name', :'col_name', :'default_value');
 \endif
@@ -715,6 +800,7 @@ select $$select 'Please check the result before proceeding to step 5.' as "Notic
 select format('migr_%s_step_5.sql',:'tbl_name') as fname \gset
 \out ./:fname
 select '\set schema_name '||:'schema_name';
+select '\set schema_oid '||:'schema_oid';
 select '\set tbl_name '||:'tbl_name';
 select '\set col_name '||:'col_name';
 select '\set old_colname '||:'old_colname'||E'\n';
@@ -730,7 +816,7 @@ select '\pset tuples_only on';
 select $$select '--Check the list of indexes to be deleted and execute the commands' as "Notice";$$||E'\n';
 --select '';
 
-select $$select pgc.oid as oid from pg_class pgc inner join pg_namespace pgn on pgc.relnamespace = pgn.oid WHERE relname=:'tbl_name' and pgn.nspname=:'schema_name' \gset$$;
+select $$select pgc.oid as oid from pg_class pgc WHERE relname=:'tbl_name' and relnamespace = :'schema_oid' \gset$$;
 select $$select 'drop index concurrently "'||schemaname||'"."'||indexname||'";'
 from pg_indexes
 where schemaname=:'schema_name' and tablename=:'tbl_name' and (indexdef like '%('||:'old_colname'||'%' or indexdef like '%'||:'old_colname'||',%' or indexdef like '%'||:'old_colname'||')%' or
