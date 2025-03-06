@@ -1,4 +1,5 @@
-\echo 'This utility helps you migrate int4 to bigint'
+\! echo -e "\033[36m"This utility helps you migrate int4 to bigint"\033[0m"
+
 \if :{?schema_name}
  /*get variable from user*/
 \else
@@ -31,9 +32,13 @@ select not exists (select 1 from pg_tables where tablename = :'tbl_name' and sch
   \q
 \else
   select format('%I.%I',:'schema_name',:'tbl_name') as res \gset
+  \set QUIET on
   \pset pager on
+  \set QUIET off
   \d+ :res
+  \set QUIET on
   \pset pager off
+  \set QUIET off
   -- Finding the table OID
   select pgc.oid as oid from pg_class pgc WHERE relname=:'tbl_name' and relnamespace = :'schema_oid' \gset
 \endif
@@ -254,8 +259,8 @@ select relpages != 0 as res from pg_class where oid = :oid \gset
 \endif 
 
 \echo
-\echo ========================
-\echo Information about table:
+\! echo -e "\033[36m"========================"\033[0m"
+\! echo -e "\033[36m"Information about table:"\033[0m"
 select 
   case 
 	when reltuples <= 0 then 0
@@ -271,8 +276,10 @@ where oid = :oid;
 select pgc.relname as index_name, pg_size_pretty(pg_relation_size(indexrelid)) index_size from pg_index pgi inner join pg_class pgc on pgi.indexrelid = pgc.oid where pgi.indrelid = :oid;
 
 --Start procedure
+\set QUIET on
 \pset format unaligned
 \pset tuples_only on
+\set QUIET off
 
 --Step 1. Added column, created a function and a trigger
 select format('migr_%s_step_1.sql',:'tbl_name') as fname \gset
@@ -439,8 +446,9 @@ select $$select 'Please check index and constraint list on step 3!' as "Notice";
 select substr(md5(random()::text), 1, 5) as rnd_str \gset
 select format('migr_%s_step_3.sql',:'tbl_name') as fname \gset
 /*Create table idx_name, md5(idx_name) and fill it in:*/
-
-select E'\n'||'Creating temporary table for indexes:';
+/*===============*/
+\set QUIET on
+--select E'\n'||'Creating temporary table for indexes:';
 create temporary table idx_name_tmp(indexrelid oid, relname text, md5_idx_name text);
 
 insert into idx_name_tmp
@@ -465,6 +473,7 @@ WHERE
         AND (   split_part(pg_get_indexdef(indexrelid), ' USING ', 2) LIKE '%(' || quote_ident(:'col_name') || ' %'
              OR split_part(pg_get_indexdef(indexrelid), ' USING ', 2) LIKE '% ' || quote_ident(:'col_name') || ')%'))
         );
+\set QUIET off
 \out ./:fname
 --We retrieve indexes built in our field (excluding indexes where this field is specified in the conditions)
 /*
@@ -533,7 +542,7 @@ select attnotnull as res from pg_attribute where attrelid = :oid and attname = :
 
 \o
 \setenv fname :fname
-\! echo -e "\033[36m"Created - $fname - Indexes and constraints"\033[0m"
+\! echo -e "\033[36m"Created $fname - Indexes and constraints"\033[0m"
 
 --Finding PrimaryKey with our col_name
 \set new_pk_idx ''
@@ -599,7 +608,8 @@ select :'seq_name' = '' as res \gset
 \endif
 
 --Foreign keys
-select E'\n'||'Creating temporary table for constraints:';
+\set QUIET on
+--select E'\n'||'Creating temporary table for constraints:';
 create temporary table fk_names_tmp(type int, command text, fk_name text, relname text, condef text);
 
 insert into fk_names_tmp SELECT 1, 'alter table '||conrelid::pg_catalog.regclass::text||' drop constraint '||quote_ident(conname)||';',
@@ -621,6 +631,7 @@ conname, conrelid::pg_catalog.regclass AS ontable,
        AND contype = 'f' AND conparentid = 0
            AND pg_catalog.pg_get_constraintdef(oid, true) like '%('||quote_ident(:'col_name')||')%'
 ORDER BY conname;
+\set QUIET off
 
 --Step 4. The sequence of commands for transition itself
 select format('migr_%s_step_4.sql',:'tbl_name') as fname \gset
@@ -648,6 +659,7 @@ where type = 'rule' and pgc.relkind = 'v' \gset
 -- if found then created temporary table
 \if :view_found
   select substr(md5(random()::text), 1, 5) as rnd_str \gset
+  \set QUIET on
   create temporary table _table_view_:rnd_str as
   WITH RECURSIVE views_on_table AS (
     SELECT
@@ -694,9 +706,9 @@ where type = 'rule' and pgc.relkind = 'v' \gset
     views_on_table v
     inner join pg_class pgc on v.refobjid = pgc.oid
     inner join pg_namespace pgn on pgc.relnamespace = pgn.oid;
+  \set QUIET off
 \endif
 \out ./:fname
-
 --Updating all the fields where values in the new column and the old one do not match (to speed up the search the temporary index was created during step 3)
 --Moving away from seq_scan - here the optimizer can mistakenly incur unnecessary costs
 select 'set enable_seqscan to 0;';
@@ -864,6 +876,7 @@ select $m$ select $$select pgc.relname as index_name, pg_size_pretty(pg_relation
 \! echo -e "\033[36m"Created $fname - Create commands for delete obsolete column and indexes"\033[0m"
 
 --Finish procedure
+\set QUIET on
 \pset format aligned
 \pset tuples_only off
-
+\set QUIET off
