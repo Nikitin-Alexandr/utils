@@ -18,8 +18,6 @@ select not exists (select 1 from information_schema.schemata where schema_name =
   select oid as schema_oid from pg_namespace where nspname = :'schema_name' \gset
 \endif
 
-\set
-
 \if :{?tbl_name}
   /*get variable from user*/
 \else
@@ -301,7 +299,8 @@ select 'commit;';
 select $$select 'The next step may take a long time. Try running it in tmux or screen!' as "Notice";$$;
 
 \o
-\echo 'Created ':'fname' - Add column, trigger and function
+\setenv fname :fname
+\! echo -e "\033[36m"Created $fname - Add column, trigger and function"\033[0m"
 
 --Step 2. Copied data from one column to another
 select format('migr_%s_step_2.sql',:'tbl_name') as fname \gset
@@ -432,8 +431,8 @@ $$;
 
 select $$select 'Please check index and constraint list on step 3!' as "Notice";$$;
 \o
-\echo 'Created ':'fname' - Copy data from old column to new
---\set
+\setenv fname :fname
+\! echo -e "\033[36m"Created $fname - Copy data from old column to new"\033[0m"
 
 --Step 3. Working with index, sequences and constraints.
 --Pullout of all indexes, that are related to the field that we’ve migrated.
@@ -533,7 +532,8 @@ select attnotnull as res from pg_attribute where attrelid = :oid and attname = :
 \endif
 
 \o
-\echo 'Created ':'fname' - Indexes and constraints
+\setenv fname :fname
+\! echo -e "\033[36m"Created - $fname - Indexes and constraints"\033[0m"
 
 --Finding PrimaryKey with our col_name
 \set new_pk_idx ''
@@ -790,7 +790,8 @@ select 'select now()-:''start_time''::timestamp as total_elapsed;';
 select $$select 'If using connection pooler you may need to perform reconnect since table definition was changed and the cached plan result type may also have changed.' as "Notice";$$;
 select $$select 'Please check the result before proceeding to step 5.' as "Notice";$$;
 \o
-\echo 'Created ':'fname' - Change columns
+\setenv fname :fname
+\! echo -e "\033[36m"Created $fname - Change columns"\033[0m"
 
 --Step 5. The final step: generating the file should only occur after the first 4 steps have been completed.
 --It is recommended to perform a reconnect for the bouncers
@@ -859,7 +860,9 @@ where oid = $$||:oid||';'; $m$;
 
 select $m$ select $$select pgc.relname as index_name, pg_size_pretty(pg_relation_size(indexrelid)) index_size from pg_index pgi inner join pg_class pgc on pgi.indexrelid = pgc.oid where pgi.indrelid = $$||:oid||';'; $m$;
 \o
-\echo 'Created ':'fname' - Create commands for delete obsolete column and indexes
+\setenv fname :fname
+\! echo -e "\033[36m"Created $fname - Create commands for delete obsolete column and indexes"\033[0m"
+
 --Finish procedure
 \pset format aligned
 \pset tuples_only off
