@@ -69,7 +69,6 @@ select $$reset statement_timeout;$$;
 select format('alter table %I.%I validate constraint %s_%s;',:'schema_name',:'tbl_name',:'tbl_name',:'rnd_str');
 select $$set statement_timeout to '100ms';$$;
 select format('alter table %I.%I alter column %I set not null;',:'schema_name',:'tbl_name',:'new_colname');
-select $$set statement_timeout to '100ms';$$;
 select format('alter table %I.%I drop constraint %s_%s;',:'schema_name',:'tbl_name',:'tbl_name',:'rnd_str');
 select $$reset statement_timeout;$$;
 select format('create unique index concurrently %s_%s_idx on %I.%I(%I);',:'tbl_name',:'new_colname',:'schema_name',:'tbl_name',:'new_colname');
