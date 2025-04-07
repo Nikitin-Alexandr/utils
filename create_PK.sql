@@ -20,10 +20,12 @@ select relpages+least(relpages/4, 10000) as n_pages from pg_class where oid = :'
 select format('create_PK_%s.sql',:'tbl_name') as fname \gset
 \out ./:fname
 
+select 'set statement_timeout to ''100ms'';';
 select format('alter table %I.%I add column %I bigint;',:'schema_name',:'tbl_name',:'new_colname');
 select format('create sequence %I.%I as bigint owned by %I.%I;',:'schema_name',:'seq_name',:'tbl_name',:'new_colname');
 select format('alter table %I.%I alter column %I set default nextval($$%I$$);',:'schema_name',:'tbl_name',:'new_colname',:'seq_name');
-select format('alter sequence %I.%I owner to %I;'||E'\n',:'schema_name',:'seq_name',:'owner');
+select format('alter sequence %I.%I owner to %I;',:'schema_name',:'seq_name',:'owner');
+select format('reset statement_timeout;'||E'\n');
 
 select 'set lock_timeout to ''100ms'';';
 select 'set session_replication_role to ''replica'';';
