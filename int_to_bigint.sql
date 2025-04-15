@@ -850,8 +850,11 @@ and pg_catalog.pg_get_constraintdef(r.oid, true) like '% NOT VALID%'
 and (pg_catalog.pg_get_constraintdef(r.oid, true) like '%('||quote_ident(:'col_name')||' %' or
      pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||' %' or
      pg_catalog.pg_get_constraintdef(r.oid, true) like '% '||quote_ident(:'col_name')||')%');$$;
-select coalesce((select 'alter table '||relname||' validate constraint '||quote_ident(fk_name)||';' from fk_names_tmp where type = 2),'') as res \gset
-\qecho select :'res' ;
+
+select count(*)!=0 as res from fk_names_tmp where type = 2 \gset
+\if :res
+  select 'select $$alter table '||relname||' validate constraint '||quote_ident(fk_name)||';$$;' from fk_names_tmp where type = 2;
+\endif
 
 select $$select '--Information about table:' as "Notice";$$||E'\n';
 --Information about table:
