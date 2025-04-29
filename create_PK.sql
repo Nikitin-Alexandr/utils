@@ -1,7 +1,7 @@
 \set schema_name public
 \set tbl_name largetable
 \set new_colname id
-\set seq_name largetable_seq_id
+select format('%s_seq_%s',:'tbl_name',:'new_colname') as seq_name \gset
 /*---------------------------*/
 \set batch_size 1000
 \set pg_sleep_interval 50
@@ -14,25 +14,33 @@ select pgc.oid as oid from pg_class pgc WHERE relname=:'tbl_name' and relnamespa
 select r.rolname as owner from pg_class pgc inner join pg_roles r on pgc.relowner = r.oid where pgc.oid = :oid \gset
 select round((reltuples/relpages*pg_relation_size(pg_class.oid)/(select current_setting('block_size'))::int) * :vacuum_interval/100) as vacuum_batch from pg_class where oid = :oid \gset
 select relpages+least(relpages/4, 10000) as n_pages from pg_class where oid = :'oid' \gset
+\set QUIET on
 \pset format unaligned
 \pset tuples_only on
+\set QUIET off
 
 select format('create_PK_%s.sql',:'tbl_name') as fname \gset
 \out ./:fname
 
+select '\set QUIET on';
 select 'set statement_timeout to ''100ms'';';
-select format('alter table %I.%I add column %I bigint;',:'schema_name',:'tbl_name',:'new_colname');
-select format('create sequence %I.%I as bigint owned by %I.%I;',:'schema_name',:'seq_name',:'tbl_name',:'new_colname');
+select '\set QUIET off';
+select format('alter table %I.%I add column if not exists %I bigint;',:'schema_name',:'tbl_name',:'new_colname');
+select format('create sequence if not exists %I.%I as bigint owned by %I.%I;',:'schema_name',:'seq_name',:'tbl_name',:'new_colname');
 select format('alter table %I.%I alter column %I set default nextval($$%I$$);',:'schema_name',:'tbl_name',:'new_colname',:'seq_name');
 select format('alter sequence %I.%I owner to %I;',:'schema_name',:'seq_name',:'owner');
+select '\set QUIET on';
 select format('reset statement_timeout;'||E'\n');
+select '\set QUIET off';
 
+select '\set QUIET on';
 select 'set lock_timeout to ''100ms'';';
-select 'set session_replication_role to ''replica'';';
+--select 'set session_replication_role to ''replica'';';
 select 'set deadlock_timeout to ''600s'';';
 select format('set vacuum_cost_delay to %s;',:vacuum_cost_delay);
 select 'select now() as start_time \gset';
 select '\set cnt_err_vac 0'||E'\n';
+select '\set QUIET off';
 
 -- Ver Pg14+
 select format('update %I.%I set %I = nextval($$%I$$) where %I is null and ctid >=''(%s,0)'' and ctid<''(%s,0)'';',:'schema_name',:'tbl_name',:'new_colname',:'seq_name',:'new_colname',batch_start,batch_start+:batch_size)||
@@ -46,7 +54,7 @@ select format('update %I.%I set %I = nextval($$%I$$) where %I is null and ctid >
           '  reset lock_timeout;'||E'\n'||
           format('  vacuum %I.%I;',:'schema_name', :'tbl_name')||E'\n'||
           /*pg_sleep for update n_dead_tup*/
-          format('  select pg_sleep(0.6);')||E'\n'||
+          format('  select pg_sleep(1);')||E'\n'||
           format('  select  n_dead_tup < %s as res from pg_stat_all_tables where relid = %s \gset',:vacuum_batch, :oid)||E'\n'||
           '  \if :res'||E'\n'||
           '    \set cnt_err_vac 0'||E'\n'||
@@ -64,18 +72,37 @@ select format('update %I.%I set %I = nextval($$%I$$) where %I is null and ctid >
     end
 from generate_series(0, (SELECT relpages+least(relpages/4, 10000) FROM pg_class where oid = :oid), :batch_size) as batch_start;
 select '';
+select '\set QUIET on';
+select 'set lock_timeout to ''0'';';
 select substr(md5(random()::text), 1, 5) as rnd_str \gset
 select $$set statement_timeout to '100ms';$$;
+select '\set QUIET off';
+select $$\! echo -e "\033[36m"Add Constraint \(not null\)"\033[0m"$$;
 select format('alter table %I.%I add constraint %s_%s check (%I is not null) not valid;',:'schema_name',:'tbl_name',:'tbl_name',:'rnd_str',:'new_colname');
+select '\set QUIET on';
 select $$reset statement_timeout;$$;
+select '\set QUIET off';
+select $$\! echo -e "\033[36m"Validate Constraint"\033[0m"$$;
 select format('alter table %I.%I validate constraint %s_%s;',:'schema_name',:'tbl_name',:'tbl_name',:'rnd_str');
+select '\set QUIET on';
 select $$set statement_timeout to '100ms';$$;
+select '\set QUIET off';
+select $$\! echo -e "\033[36m"Alter column and drop constraint"\033[0m"$$;
 select format('alter table %I.%I alter column %I set not null;',:'schema_name',:'tbl_name',:'new_colname');
 select format('alter table %I.%I drop constraint %s_%s;',:'schema_name',:'tbl_name',:'tbl_name',:'rnd_str');
+select '\set QUIET on';
 select $$reset statement_timeout;$$;
+select '\set QUIET off';
+select $$\! echo -e "\033[36m"Create unique index concurrently"\033[0m"$$;
 select format('create unique index concurrently %s_%s_idx on %I.%I(%I);',:'tbl_name',:'new_colname',:'schema_name',:'tbl_name',:'new_colname');
+select '\set QUIET on';
 select $$set statement_timeout to '100ms';$$;
-select format('alter table %I.%I add constraint %s_%s_pkey primary key using index largetable_id_idx;',:'schema_name',:'tbl_name',:'tbl_name',:'new_colname');
+select '\set QUIET off';
+select $$\! echo -e "\033[36m"Add Primary Key"\033[0m"$$;
+select format('alter table %I.%I add constraint %s_%s_pkey primary key using index %s_%s_idx;',:'schema_name',:'tbl_name',:'tbl_name',:'new_colname',:'tbl_name',:'new_colname');
+select '\set QUIET on';
 select $$reset statement_timeout;$$;
+select '\set QUIET off';
 select format('\d %I.%I',:'schema_name',:'tbl_name');
 \out
+select 'Created file '||:'fname'
