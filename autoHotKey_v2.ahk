@@ -91,7 +91,7 @@ Exit
 
 Alt & 8::{
 	old_clip := ClipboardAll()
-	A_Clipboard :="systemctl list-units -t service --all|grep postgres"
+	A_Clipboard :="systemctl list-unit-files --type=service --all|grep postgres"
 	Send "+{Ins}{Enter}"
 	Sleep 500
 	A_Clipboard := old_clip
