@@ -626,8 +626,7 @@ insert into fk_names_tmp SELECT 2, 'alter table '||conrelid::pg_catalog.regclass
 conname, conrelid::pg_catalog.regclass AS ontable,
         pg_catalog.pg_get_constraintdef(oid, true) AS condef
   FROM pg_catalog.pg_constraint c
- WHERE confrelid IN (SELECT pg_catalog.pg_partition_ancestors(:oid)
-                     UNION ALL VALUES (:oid))
+ WHERE (conrelid = :oid or confrelid IN (SELECT pg_catalog.pg_partition_ancestors(:oid)))
        AND contype = 'f' AND conparentid = 0
            AND pg_catalog.pg_get_constraintdef(oid, true) like '%('||quote_ident(:'col_name')||')%'
 ORDER BY conname;
