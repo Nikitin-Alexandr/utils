@@ -482,27 +482,32 @@ WHERE
 3) ", id)" -> ", new_id)"
 4) ", id," -> ", new_id,"
 5) " id " -> " new_id "
+6) "(id " -> "(new_id ")
 */
 
 select replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 1), 'INDEX', 'INDEX CONCURRENTLY'), relname, quote_ident(md5(relname))),'""','"')||' USING '||
-replace(replace(replace(replace(split_part(pg_get_indexdef(indexrelid),' USING ', 2),
-   '('||quote_ident(:'col_name')||',','('||quote_ident(:'new_colname')||','),
-   '('||quote_ident(:'col_name')||')', '('||quote_ident(:'new_colname')||')'),
-   ', '||quote_ident(:'col_name')||')', ', '||quote_ident(:'new_colname')||')'),
-   ', '||quote_ident(:'col_name')||',',', '||quote_ident(:'new_colname')||',')||';'
+replace(replace(replace(replace(replace(replace(
+   split_part(pg_get_indexdef(indexrelid),' USING ', 2),
+     '('||quote_ident(:'col_name')||',','('||quote_ident(:'new_colname')||','),
+     '('||quote_ident(:'col_name')||')', '('||quote_ident(:'new_colname')||')'),
+     ', '||quote_ident(:'col_name')||')', ', '||quote_ident(:'new_colname')||')'),
+     ', '||quote_ident(:'col_name')||',',', '||quote_ident(:'new_colname')||','),
+     ' '||quote_ident(:'col_name')||' ',' '||quote_ident(:'new_colname')||' '),
+     '('||quote_ident(:'col_name')||' ','('||quote_ident(:'new_colname')||' ')
+     ||';'
 from idx_name_tmp
 where (pg_get_indexdef(indexrelid) not like '%WHERE%')
 union
 select replace(split_part(replace(replace(pg_get_indexdef(indexrelid), 'INDEX', 'INDEX CONCURRENTLY'), relname, quote_ident(md5(relname))),' USING ', 1),'""','"')||' USING '||
-replace(
-	replace(
-		replace(
-			replace(
-				split_part(pg_get_indexdef(indexrelid),' USING ', 2), 
-					'('||quote_ident(:'col_name')||' ','('||quote_ident(:'new_colname')||' ')
-			,' '||quote_ident(:'col_name')||')',' '||quote_ident(:'new_colname')||')')
-		,' '||quote_ident(:'col_name')||' ',' '||quote_ident(:'new_colname')||' ')
-	, '('||quote_ident(:'col_name')||',','('||quote_ident(:'new_colname')||',')||';'
+replace(replace(replace(replace(replace(replace(
+   split_part(pg_get_indexdef(indexrelid),' USING ', 2),
+     '('||quote_ident(:'col_name')||',','('||quote_ident(:'new_colname')||','),
+     '('||quote_ident(:'col_name')||')', '('||quote_ident(:'new_colname')||')'),
+     ', '||quote_ident(:'col_name')||')', ', '||quote_ident(:'new_colname')||')'),
+     ', '||quote_ident(:'col_name')||',',', '||quote_ident(:'new_colname')||','),
+     ' '||quote_ident(:'col_name')||' ',' '||quote_ident(:'new_colname')||' '),
+     '('||quote_ident(:'col_name')||' ','('||quote_ident(:'new_colname')||' ')
+     ||';'
 from idx_name_tmp
 where (pg_get_indexdef(indexrelid) like '%WHERE%') and (split_part(pg_get_indexdef(indexrelid),' USING ', 2) like '%('||quote_ident(:'col_name')||',%' or split_part(pg_get_indexdef(indexrelid),' USING ', 2) like '% '||quote_ident(:'col_name')||')%' or split_part(pg_get_indexdef(indexrelid),' USING ', 2) like '%('||quote_ident(:'col_name')||' %');
 --Created a temporary index
@@ -616,7 +621,7 @@ insert into fk_names_tmp SELECT 1, 'alter table '||conrelid::pg_catalog.regclass
 conname, conrelid::pg_catalog.regclass AS ontable,
        pg_catalog.pg_get_constraintdef(oid, true) AS condef
  FROM pg_catalog.pg_constraint c
- WHERE confrelid IN (SELECT pg_catalog.pg_partition_ancestors(:oid)
+ WHERE conrelid IN (SELECT pg_catalog.pg_partition_ancestors(:oid)
                      UNION ALL VALUES (:oid))
        AND contype = 'f' AND conparentid = 0
            AND pg_catalog.pg_get_constraintdef(oid, true) like '%('||quote_ident(:'col_name')||')%'
