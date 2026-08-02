@@ -621,19 +621,18 @@ insert into fk_names_tmp SELECT 1, 'alter table '||conrelid::pg_catalog.regclass
 conname, conrelid::pg_catalog.regclass AS ontable,
        pg_catalog.pg_get_constraintdef(oid, true) AS condef
  FROM pg_catalog.pg_constraint c
- WHERE conrelid IN (SELECT pg_catalog.pg_partition_ancestors(:oid)
-                     UNION ALL VALUES (:oid))
+WHERE (conrelid IN (SELECT pg_catalog.pg_partition_ancestors(:oid) UNION VALUES (:oid)) and conkey && array(select attnum from pg_attribute where attrelid = :oid and attname = :'col_name') or
+        confrelid IN (SELECT pg_catalog.pg_partition_ancestors(:oid) UNION VALUES (:oid)) and confkey && array(select attnum from pg_attribute where attrelid = :oid and attname = :'col_name'))
        AND contype = 'f' AND conparentid = 0
-           AND pg_catalog.pg_get_constraintdef(oid, true) like '%('||quote_ident(:'col_name')||')%'
 ORDER BY conname;
 
 insert into fk_names_tmp SELECT 2, 'alter table '||conrelid::pg_catalog.regclass::text||' add constraint '||quote_ident(conname)||' '||pg_catalog.pg_get_constraintdef(oid, true)::text||' NOT VALID;',
 conname, conrelid::pg_catalog.regclass AS ontable,
         pg_catalog.pg_get_constraintdef(oid, true) AS condef
   FROM pg_catalog.pg_constraint c
- WHERE (conrelid = :oid or confrelid IN (SELECT pg_catalog.pg_partition_ancestors(:oid)))
+WHERE (conrelid IN (SELECT pg_catalog.pg_partition_ancestors(:oid) UNION VALUES (:oid)) and conkey && array(select attnum from pg_attribute where attrelid = :oid and attname = :'col_name') or
+        confrelid IN (SELECT pg_catalog.pg_partition_ancestors(:oid) UNION VALUES (:oid)) and confkey && array(select attnum from pg_attribute where attrelid = :oid and attname = :'col_name'))
        AND contype = 'f' AND conparentid = 0
-           AND pg_catalog.pg_get_constraintdef(oid, true) like '%('||quote_ident(:'col_name')||')%'
 ORDER BY conname;
 \set QUIET off
 
