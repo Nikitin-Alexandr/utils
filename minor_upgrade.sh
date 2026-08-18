@@ -6,7 +6,7 @@ if [ -f /etc/os-release ]; then
     case "$ID" in
         debian|ubuntu|linuxmint)
             ;;
-        rhel|centos|fedora|rocky|almalinux)
+        rhel|centos|fedora|rocky|almalinux|ol)
 			IS_DEBIAN=1
             ;;
         *)
