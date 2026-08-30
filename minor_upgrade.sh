@@ -24,7 +24,7 @@ if [ $IS_DEBIAN -eq 2 ]; then
 fi
 
 # Получаем номера версий запущенных PostgreSQL
-echo 'Prepare:'
+#echo 'Prepare:'
 VERSIONS=()
 for pid in $(pgrep -f "(postgres|postmaster).*-D"); do
     DATA_DIR=$(ps -p "$pid" -o cmd= | grep -oP '(?<=-D )\S+')
@@ -44,6 +44,11 @@ fi
 if [ "$IS_DEBIAN" -eq 0 ]; then
 	echo 'sudo apt update'
 fi	
+
+
+echo 'Informataion about services:'
+{ systemctl list-units --all --type=service 'pgbouncer*' 'postgresql*' 'patroni*' 'pgq*' --no-legend --plain; systemctl list-unit-files --type=service 'pgbouncer*' 'postgresql*' 'patroni*' 'pgq*' --no-legend; } | awk '!seen[$1]++ {print $1}' | while read s; do printf "%-50s enabled=%-10s active=%-10s\n" "$s" "$(systemctl is-enabled $s 2>/dev/null)" "$(systemctl is-active $s 2>/dev/null)"; done | sort -t@ -k1,1 -k2
+printf '\n'
 
 for VERSION in "${VERSIONS[@]}"; do
 	#Для найденных PostgreSQL формируем команды загрузки обновленной версии
@@ -83,8 +88,24 @@ if [ "$PGBOUNCER_COUNT" -eq 0 ]; then
 	#План на случай отсутствия баунсеров
 elif [ "$PGBOUNCER_COUNT" -eq 1 ]; then
 	echo 'One pgbouncer has been launched'
-	#План на случай одного баунсера
+	#План на случай одного баунсера, предполагаем, что раз уж он один, то запущен не через so_reuseport, в дальшейшем вставить проверку.
+        pgrep -x pgbouncer | while read pid; do
+                cmd=$(ps -p "$pid" -o cmd=)
+                config_file=$(echo "$cmd" | awk '{print $NF}')
+                socket=$(grep "^unix_socket_dir\b" $config_file|awk -F '=' '{print $2}')
+                socket=${socket:-/tmp}
+                port=`ss -tulnp4|grep pgbouncer | awk -F':' '{print $2}'|awk '{print $1}'`
+                if [[ "$config_file" == *.ini ]] && [[ -f "$config_file" ]]; then
+                   echo 'PID:'$pid 'PORT:'$port 'socket:' $socket
+                   echo 'Commands:'
+                   echo "psql -U pgbouncer --port $port -h $socket -c 'show state'"
+                   echo "psql -U pgbouncer --port $port -h $socket -c 'pause'"
+                   echo "psql -U pgbouncer --port $port -h $socket -c 'resume'"
+                fi
+        done
 else
+        #Тут подстава может быть такой, что у нескольких PG могут быть разные баунсеры, и обычные и so_reuseport, и мы не знаем какой баунсер за какой кластер PG отвечает 
+        #Поэтому мы можем только дать рекомендации по взаимодействию с ними.
 	#План на случай нескольких баунсеров (как с so_reuseport так и без него).
 	pgrep -x pgbouncer | while read pid; do
 		cmd=$(ps -p "$pid" -o cmd=)
