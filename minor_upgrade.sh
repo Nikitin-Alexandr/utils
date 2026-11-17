@@ -88,6 +88,7 @@ if [ "$PGBOUNCER_COUNT" -eq 0 ]; then
 	#План на случай отсутствия баунсеров
 elif [ "$PGBOUNCER_COUNT" -eq 1 ]; then
 	echo 'One pgbouncer has been launched'
+        pgbouncer --version| head -n 1
 	#План на случай одного баунсера, предполагаем, что раз уж он один, то запущен не через so_reuseport, в дальшейшем вставить проверку.
         pgrep -x pgbouncer | while read pid; do
                 cmd=$(ps -p "$pid" -o cmd=)
@@ -96,7 +97,7 @@ elif [ "$PGBOUNCER_COUNT" -eq 1 ]; then
                 socket=${socket:-/tmp}
                 port=`ss -tulnp4|grep pgbouncer | awk -F':' '{print $2}'|awk '{print $1}'`
                 if [[ "$config_file" == *.ini ]] && [[ -f "$config_file" ]]; then
-                   echo 'PID:'$pid 'PORT:'$port 'socket:' $socket
+                   echo 'PID:'$pid 'PORT:'$port 'socket:' $socket 'Limit: '`grep "open files" /proc/"$pid"/limits;`
                    echo 'Commands:'
                    echo "psql -U pgbouncer --port $port -h $socket -c 'show state'"
                    echo "psql -U pgbouncer --port $port -h $socket -c 'pause'"
@@ -107,6 +108,7 @@ else
         #Тут подстава может быть такой, что у нескольких PG могут быть разные баунсеры, и обычные и so_reuseport, и мы не знаем какой баунсер за какой кластер PG отвечает 
         #Поэтому мы можем только дать рекомендации по взаимодействию с ними.
 	#План на случай нескольких баунсеров (как с so_reuseport так и без него).
+        pgbouncer --version|head -n 1
 	pgrep -x pgbouncer | while read pid; do
 		cmd=$(ps -p "$pid" -o cmd=)
 		config_file=$(echo "$cmd" | awk '{print $NF}')
@@ -119,8 +121,7 @@ else
                    }
 		'|uniq)
 		if [[ "$config_file" == *.ini ]] && [[ -f "$config_file" ]]; then
-#		    echo 'PID:'$pid 'PORT:'$port 'socket:' $socket	
-                    echo 'PID:'$pid 'PORT:'$port 'SO_REUSEPORT:' `psql -A -U pgbouncer --port $port -h $socket -c 'show config'|grep so_reuseport|awk -F '|' '{print $2}'`
+                    echo 'PID:'$pid 'PORT:'$port 'SO_REUSEPORT:' `psql -A -U pgbouncer --port $port -h $socket -c 'show config'|grep so_reuseport|awk -F '|' '{print $2}'` 'Limit: '`grep "open files" /proc/"$pid"/limits;`
 		fi
 	done
 fi
